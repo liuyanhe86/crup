@@ -1,0 +1,388 @@
+Process ID 7994, Process Parent ID 7993
+Loaded config file sucessfully.
+pretrained_embed : False
+zeros : False
+avg : False
+uniform : False
+nnembed : True
+pretrained_embed_file : glove.6B.100d.txt
+train_file : ./Data/Conll2003_BMES/train.txt
+dev_file : ./Data/Conll2003_BMES/valid.txt
+test_file : ./Data/Conll2003_BMES/test.txt
+max_count : -1
+min_freq : 1
+shuffle : True
+epochs_shuffle : True
+save_pkl : True
+pkl_directory : ./Save_pkl
+pkl_data : pkl_data.pkl
+pkl_alphabet : pkl_alphabet.pkl
+pkl_iter : pkl_iter.pkl
+pkl_embed : pkl_embed.pkl
+save_dict : True
+dict_directory : ./Save_dictionary
+word_dict : dictionary_word.txt
+label_dict : dictionary_label.txt
+save_direction : ./Save_model
+save_best_model_dir : ./Save_BModel
+save_model : True
+save_all_model : False
+save_best_model : True
+model_name : ner_model
+rm_model : True
+average_batch : False
+use_crf : True
+use_char : True
+model_bilstm : True
+model_bilstm_context : False
+lstm_layers : 1
+embed_dim : 100
+embed_finetune : True
+lstm_hiddens : 200
+dropout_emb : 0.5
+dropout : 0.5
+max_char_len : 20
+char_dim : 30
+conv_filter_sizes : 3
+conv_filter_nums : 30
+windows_size : 5
+adam : False
+sgd : True
+learning_rate : 0.015
+weight_decay : 1.0e-8
+momentum : 0.0
+clip_max_norm_use : False
+clip_max_norm : None
+use_lr_decay : True
+lr_rate_decay : 0.05
+min_lrate : 0.000005
+max_patience : 1
+num_threads : 1
+epochs : 1000
+early_max_patience : 10
+backward_batch_size : 1
+batch_size : 10
+dev_batch_size : 10
+test_batch_size : 10
+log_interval : 100
+***************************************
+Device : cuda:0
+Data Process : True
+Train model : True
+Test model : False
+t_model : None
+t_data : None
+predict : False
+***************************************
+Using GPU To Train......
+Current Cuda Device 0
+torch.cuda.initial_seed 233
+load data for process or pkl data.
+process data
+Processing Data......
+Loading Data......
+Data Path ['./Data/Conll2003_BMES/train.txt', './Data/Conll2003_BMES/valid.txt', './Data/Conll2003_BMES/test.txt']
+Loading Data Form ./Data/Conll2003_BMES/train.txt
+write shuffle insts to file ./Data/Conll2003_BMES/train.txt.shuffle
+Loading Data Form ./Data/Conll2003_BMES/valid.txt
+write shuffle insts to file ./Data/Conll2003_BMES/valid.txt.shuffle
+Loading Data Form ./Data/Conll2003_BMES/test.txt
+write shuffle insts to file ./Data/Conll2003_BMES/test.txt.shuffle
+train sentence 125, dev sentence 147, test sentence 160.
+Build Vocab Start...... 
+the length of train data 125
+the length of dev data 147
+the length of test data 160
+the length of data that create Alphabet 432
+*****************    create 1 iterator    **************
+The all data has created iterator.
+*****************    create 2 iterator    **************
+The all data has created iterator.
+*****************    create 3 iterator    **************
+The all data has created iterator.
+***************************************
+All Data/Alphabet/Iterator Use Time 15.5888
+***************************************
+learning algorithm is SGD.
+embed_num : 1837, char_embed_num: 64, class_num : 18
+PaddingID 1
+char PaddingID 1
+word_dict_path : ./Save_dictionary/dictionary_word.txt
+label_dict_path : ./Save_dictionary/dictionary_label.txt
+Saving dictionary
+Save dictionary finished.
+Saving dictionary
+Save dictionary finished.
+copy dictionary to ./Save_model/2022-03-01_10-37-33
+***************************************
+Copy models to ./Save_model/2022-03-01_10-37-33
+Sequence_Label(
+  (encoder_model): BiLSTM_CNN(
+    (embed): Embedding(1837, 100, padding_idx=1)
+    (char_embedding): Embedding(64, 30, padding_idx=1)
+    (dropout_embed): Dropout(p=0.5, inplace=False)
+    (dropout): Dropout(p=0.5, inplace=False)
+    (bilstm): LSTM(130, 200, batch_first=True, bidirectional=True)
+    (linear): Linear(in_features=400, out_features=20, bias=True)
+  )
+  (crf_layer): CRF()
+)
+Training Start......
+Optimizer => SGD (lr: 0.015, weight_decay: 1e-08, g_clip: None)
+<bound method CRF.neg_log_likelihood_loss of CRF()>
+
+## The 1 Epoch, All 1000 Epochs ! ##
+now lr is 0.015
+Train Time 2.435/home/lyh/cl_exp/NLP/ContinualNER/baselines/BiLSTM_CNN_CRF/models/CRF.py:165: UserWarning: masked_fill_ received a mask with dtype torch.uint8, this behavior is now deprecated,please use a mask with dtype torch.bool instead. (Triggered internally at  /opt/conda/conda-bld/pytorch_1639180588308/work/aten/src/ATen/native/cuda/Indexing.cu:963.)
+  cur_bp.masked_fill_(mask[idx].view(batch_size, 1).expand(batch_size, tag_size), 0)
+
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.201
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 0.000000, Locate on 1 Epoch.
+The Current Best Test Result: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%
+Test Time 0.151
+save best model to ./Save_BModel/ner_model.pt
+
+## The 2 Epoch, All 1000 Epochs ! ##
+now lr is 0.014285714285714285
+Train Time 1.044
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.155
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 0.000000, Locate on 2 Epoch.
+The Current Best Test Result: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%
+Test Time 0.174
+save best model to ./Save_BModel/ner_model.pt
+
+## The 3 Epoch, All 1000 Epochs ! ##
+now lr is 0.013636363636363634
+Train Time 0.967
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.167
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 0.000000, Locate on 3 Epoch.
+The Current Best Test Result: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%
+Test Time 0.229
+save best model to ./Save_BModel/ner_model.pt
+
+## The 4 Epoch, All 1000 Epochs ! ##
+now lr is 0.013043478260869566
+Train Time 0.985
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.170
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 0.000000, Locate on 4 Epoch.
+The Current Best Test Result: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%
+Test Time 0.146
+save best model to ./Save_BModel/ner_model.pt
+
+## The 5 Epoch, All 1000 Epochs ! ##
+now lr is 0.0125
+Train Time 1.014
+Dev eval: precision = 6.060606%  recall = 0.757576% , f-score = 1.346801%,  [TAG-ACC = 0.000000%]
+Dev Time 0.167
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 1.346801, Locate on 5 Epoch.
+The Current Best Test Result: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%
+Test Time 0.179
+save best model to ./Save_BModel/ner_model.pt
+
+## The 6 Epoch, All 1000 Epochs ! ##
+now lr is 0.012
+Train Time 0.750
+Dev eval: precision = 14.556962%  recall = 8.712121% , f-score = 10.900474%,  [TAG-ACC = 0.000000%]
+Dev Time 0.174
+Test eval: precision = 17.647059%  recall = 9.677419% , f-score = 12.500000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 10.900474, Locate on 6 Epoch.
+The Current Best Test Result: precision = 17.647059%  recall = 9.677419% , f-score = 12.500000%
+Test Time 0.256
+save best model to ./Save_BModel/ner_model.pt
+
+## The 7 Epoch, All 1000 Epochs ! ##
+now lr is 0.011538461538461537
+Train Time 1.028
+Dev eval: precision = 37.037037%  recall = 3.787879% , f-score = 6.872852%,  [TAG-ACC = 0.000000%]
+Dev Time 0.240
+Test eval: precision = 41.666667%  recall = 4.838710% , f-score = 8.670520%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 10.900474, Locate on 6 Epoch.
+The Current Best Test Result: precision = 17.647059%  recall = 9.677419% , f-score = 12.500000%
+Test Time 0.207
+Dev Has Not Promote 1 / 10
+
+## The 8 Epoch, All 1000 Epochs ! ##
+now lr is 0.01111111111111111
+Train Time 1.006
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.220
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 10.900474, Locate on 6 Epoch.
+The Current Best Test Result: precision = 17.647059%  recall = 9.677419% , f-score = 12.500000%
+Test Time 0.228
+Dev Has Not Promote 2 / 10
+
+## The 9 Epoch, All 1000 Epochs ! ##
+now lr is 0.010714285714285714
+Train Time 1.027
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.209
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 10.900474, Locate on 6 Epoch.
+The Current Best Test Result: precision = 17.647059%  recall = 9.677419% , f-score = 12.500000%
+Test Time 0.199
+Dev Has Not Promote 3 / 10
+
+## The 10 Epoch, All 1000 Epochs ! ##
+now lr is 0.010344827586206896
+Train Time 0.951
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.171
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 10.900474, Locate on 6 Epoch.
+The Current Best Test Result: precision = 17.647059%  recall = 9.677419% , f-score = 12.500000%
+Test Time 0.178
+Dev Has Not Promote 4 / 10
+
+## The 11 Epoch, All 1000 Epochs ! ##
+now lr is 0.01
+Train Time 0.928
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.170
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 10.900474, Locate on 6 Epoch.
+The Current Best Test Result: precision = 17.647059%  recall = 9.677419% , f-score = 12.500000%
+Test Time 0.189
+Dev Has Not Promote 5 / 10
+
+## The 12 Epoch, All 1000 Epochs ! ##
+now lr is 0.009677419354838708
+Train Time 0.866
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.209
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 10.900474, Locate on 6 Epoch.
+The Current Best Test Result: precision = 17.647059%  recall = 9.677419% , f-score = 12.500000%
+Test Time 0.187
+Dev Has Not Promote 6 / 10
+
+## The 13 Epoch, All 1000 Epochs ! ##
+now lr is 0.009375
+Train Time 1.020
+Dev eval: precision = 23.157895%  recall = 8.333333% , f-score = 12.256267%,  [TAG-ACC = 0.000000%]
+Dev Time 0.160
+Test eval: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.210
+save best model to ./Save_BModel/ner_model.pt
+
+## The 14 Epoch, All 1000 Epochs ! ##
+now lr is 0.00909090909090909
+Train Time 0.966
+Dev eval: precision = 100.000000%  recall = 1.515152% , f-score = 2.985075%,  [TAG-ACC = 0.000000%]
+Dev Time 0.174
+Test eval: precision = 100.000000%  recall = 0.967742% , f-score = 1.916933%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.192
+Dev Has Not Promote 1 / 10
+
+## The 15 Epoch, All 1000 Epochs ! ##
+now lr is 0.008823529411764704
+Train Time 1.002
+Dev eval: precision = 100.000000%  recall = 1.515152% , f-score = 2.985075%,  [TAG-ACC = 0.000000%]
+Dev Time 0.188
+Test eval: precision = 100.000000%  recall = 0.967742% , f-score = 1.916933%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.185
+Dev Has Not Promote 2 / 10
+
+## The 16 Epoch, All 1000 Epochs ! ##
+now lr is 0.008571428571428572
+Train Time 1.035
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.225
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.211
+Dev Has Not Promote 3 / 10
+
+## The 17 Epoch, All 1000 Epochs ! ##
+now lr is 0.008333333333333333
+Train Time 1.083
+Dev eval: precision = 100.000000%  recall = 1.515152% , f-score = 2.985075%,  [TAG-ACC = 0.000000%]
+Dev Time 0.196
+Test eval: precision = 100.000000%  recall = 0.967742% , f-score = 1.916933%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.231
+Dev Has Not Promote 4 / 10
+
+## The 18 Epoch, All 1000 Epochs ! ##
+now lr is 0.008108108108108107
+Train Time 1.023
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.241
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.206
+Dev Has Not Promote 5 / 10
+
+## The 19 Epoch, All 1000 Epochs ! ##
+now lr is 0.007894736842105263
+Train Time 1.029
+Dev eval: precision = 100.000000%  recall = 0.378788% , f-score = 0.754717%,  [TAG-ACC = 0.000000%]
+Dev Time 0.177
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.203
+Dev Has Not Promote 6 / 10
+
+## The 20 Epoch, All 1000 Epochs ! ##
+now lr is 0.007692307692307691
+Train Time 0.952
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.163
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.177
+Dev Has Not Promote 7 / 10
+
+## The 21 Epoch, All 1000 Epochs ! ##
+now lr is 0.0075
+Train Time 0.967
+Dev eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+Dev Time 0.175
+Test eval: precision = 0.000000%  recall = 0.000000% , f-score = 0.000000%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.152
+Dev Has Not Promote 8 / 10
+
+## The 22 Epoch, All 1000 Epochs ! ##
+now lr is 0.007317073170731708
+Train Time 0.914
+Dev eval: precision = 100.000000%  recall = 1.515152% , f-score = 2.985075%,  [TAG-ACC = 0.000000%]
+Dev Time 0.203
+Test eval: precision = 100.000000%  recall = 0.967742% , f-score = 1.916933%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.201
+Dev Has Not Promote 9 / 10
+
+## The 23 Epoch, All 1000 Epochs ! ##
+now lr is 0.007142857142857143
+Train Time 0.968
+Dev eval: precision = 100.000000%  recall = 1.515152% , f-score = 2.985075%,  [TAG-ACC = 0.000000%]
+Dev Time 0.207
+Test eval: precision = 100.000000%  recall = 0.967742% , f-score = 1.916933%,  [TAG-ACC = 0.000000%]
+The Current Best Dev F-score: 12.256267, Locate on 13 Epoch.
+The Current Best Test Result: precision = 41.111111%  recall = 11.935484% , f-score = 18.500000%
+Test Time 0.181
+Dev Has Not Promote 10 / 10
+Early Stop Train. Best Score Locate on 13 Epoch.
