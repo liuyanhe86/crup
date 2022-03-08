@@ -16,10 +16,12 @@ class ConllSample(Sample):
         self.words, self.tags = zip(*self.lines)
         
 class MySample(Sample):
-    # no B-, I-
-    # labelform: coarsetype-finegrainedtype
     def get_tag_coarse_class(self):
-        # get coarse class name
+        '''
+        get all coarse class names
+        no B-, I-
+        labelform: coarsetype-finegrainedtype
+        '''
         return list(set([tag.split('-')[0] for tag in self.tags if tag != 'O']))
 
     def __find_class__(self, tag, target_classes):

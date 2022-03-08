@@ -1,7 +1,7 @@
 from configparser import ConfigParser
 
 
-class myconf(ConfigParser):
+class MyConf(ConfigParser):
     def __init__(self, defaults=None):
         ConfigParser.__init__(self, defaults=defaults)
         self.add_sec = "Additional"
@@ -10,11 +10,11 @@ class myconf(ConfigParser):
         return optionstr
 
 
-class Configurable(myconf):
+class Configurable(MyConf):
     def __init__(self, config_file):
         super().__init__()
 
-        config = myconf()
+        config = MyConf()
         config.read(config_file)
         self._config = config
         self.config_file = config_file
@@ -29,6 +29,46 @@ class Configurable(myconf):
     def add_args(self, key, value):
         self._config.set(self.add_sec, key, value)
         self._config.write(open(self.config_file, 'w'))
+
+    
+    # main
+    @property
+    def batch_size(self):
+        return self._config.getint("main", "batch_size")
+
+    @property
+    def train_iter(self):
+        return self._config.getint("main", "train_iter")
+
+    @property
+    def test_iter(self):
+        return self._config.getint("main", "test_iter")
+
+    @property
+    def max_length(self):
+        return self._config.getint("main", "max_length")
+
+    @property
+    def learning_rate(self):
+        return self._config.getfloat("main", "learning_rate")
+
+    @property
+    def grad_iter(self):
+        return self._config.getint("main", "grad_iter")
+
+    @property
+    def random_seed(self):
+        return self._config.getint("main", "random_seed")
+
+
+    # continuum
+    @property
+    def continuum_dir(self):
+        return self._config.get("continuum", "continuum_dir")
+
+    @property
+    def num_episode(self):
+        return self._config.getint("continuum", "num_episode")
 
     # few-nerd
     @property

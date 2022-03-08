@@ -48,7 +48,7 @@ class FewshotSampler:
     def __check__(self):
         for idx, sample in enumerate(self.samples):
             if not hasattr(sample,'get_class_count'):
-                print('[ERROR] samples in self.samples expected to have `get_class_count` attribute, but self.samples[{idx}] does not')
+                print(f'[ERROR] samples in self.samples expected to have `get_class_count` attribute, but self.samples[{idx}] does not')
                 raise ValueError
 
     def __additem__(self, index, set_class):
@@ -95,7 +95,7 @@ class FewshotSampler:
         '''
         support_class = {'k':self.K}
         support_idx = []
-        query_class = {'k':self.Q}
+        query_class = {'q':self.Q}
         query_idx = []
         target_classes = random.sample(self.classes, self.N)
         candidates = self.__get_candidates__(target_classes)
