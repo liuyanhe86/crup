@@ -15,16 +15,18 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 
-def main():
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Continual NER")
     parser.add_argument("--config_file", dest="config_file", type=str, default="config/config.cfg",
             help="config path")
     parser.add_argument("--device", dest="device", type=str, default="cuda:0", 
             help="device['cpu', 'cuda:0', 'cuda:1', ......]")
     parser.add_argument('--model', dest="model", type=str, default='Bert-Tagger',
-            help='model name, must be in [BiLSTM-CRF, BiLSTM-CNN-CRF, Bert-Tagger]')
+            help='model name, must be in [BiLSTM-CRF, BiLSTM-CNN-CRF, Bert-Tagger,]')
     parser.add_argument('--dataset', dest="dataset", type=str, default='few-nerd',
             help='dataset name, must be in [few-nerd, stackoverflow]')
+    parser.add_argument('--protocal', dest="protocal", type=str, default='CI',
+            help='continual learning protocal, must be in [fine-tune, CI, long-tail, multi-task]')
     
     args = parser.parse_args()
     opt = config.Configurable(args.config_file)

@@ -1,0 +1,78 @@
+(	O
+Left	Keyboard_IP
+arrow	Keyboard_IP
+moves	O
+the	O
+slider	O
+to	O
+the	O
+left	O
+and	O
+decreases	O
+the	O
+value	O
+,	O
+right	Keyboard_IP
+arrow	Keyboard_IP
+does	O
+the	O
+opposite	O
+)	O
+
+39	O
+-	O
+right	Keyboard_IP
+
+ABCDEF|	Keyboard_IP
+
+Arrow	Keyboard_IP
+down	Keyboard_IP
+and	O
+page	Keyboard_IP
+down	Keyboard_IP
+move	O
+the	O
+slider	O
+to	O
+the	O
+right	O
+and	O
+increase	O
+the	O
+value	O
+.	O
+
+window+alt+shift+	Keyboard_IP
+k	Keyboard_IP
+.	O
+
+(	O
+Note	O
+that	O
+this	O
+sequence	O
+was	O
+typed	O
+in	O
+normal	O
+mode	O
+and	O
+no	O
+<return>	Keyboard_IP
+was	O
+pressed	O
+at	O
+the	O
+end	O
+of	O
+the	O
+sequence	O
+)	O
+
+40	O
+-	O
+down	Keyboard_IP
+
+37	O
+-	O
+left	Keyboard_IP
