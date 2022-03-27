@@ -1,4 +1,5 @@
-import random
+import sys
+sys.path.append('..')
 import torch
 import torch.utils.data
 import numpy as np
@@ -87,7 +88,7 @@ class NERDataset(torch.utils.data.Dataset):
     """
     def __init__(self, file_path:str, tokenizer, max_length: int, ignore_label_id: int=-1):
         if not os.path.exists(file_path):
-            print("[ERROR] Data file does not exist!")
+            print(f"[ERROR] Data file {file_path} does not exist!")
             assert(0)
         self.class2sampleid = {} # [class:str : sample_with_class_ids:List[int]]
         self.tokenizer = tokenizer
@@ -268,7 +269,7 @@ def get_loader(file_path: str, tokenizer, batch_size: int, max_length: int,
 
 
 if __name__ == '__main__':
-    train_loader = get_loader(file_path='../data/few-nerd/continual/coarse/non-overlapping/art.txt',\
+    train_loader = get_loader(file_path='data/few-nerd/continual/coarse/non-overlapping/art/train.txt',\
         tokenizer=BertTokenizer.from_pretrained('bert-base-uncased'), batch_size=10, max_length=100)
     # for i, s in enumerate(train_loader):
     #     print(s)

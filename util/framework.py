@@ -1,13 +1,16 @@
+import logging
 import os
 import sys
-import dataloader
 import torch
 from torch import nn
+from torch.utils.data import dataloader
 from torch.nn import functional as F
-# from pytorch_pretrained_bert import BertAdam
 from transformers import AdamW, get_linear_schedule_with_warmup
 
+import dataloader
 from viterbi import ViterbiDecoder
+
+logger = logging.getLogger(__name__)
 
 
 def get_abstract_transitions(train_fname):
@@ -52,7 +55,7 @@ def warmup_linear(global_step, warmup_step):
     else:
         return 1.0
 
-class FewShotNERModel(nn.Module):
+class NERModel(nn.Module):
     def __init__(self, my_word_encoder, ignore_index=-1): 
         '''
         word_encoder: Sentence encoder
@@ -67,11 +70,7 @@ class FewShotNERModel(nn.Module):
     
     def forward(self, support, query, N, K, Q):
         '''
-        support: Inputs of the support set.
-        query: Inputs of the query set.
-        N: Num of classes
-        K: Num of instances for each class in the support set
-        Q: Num of instances for each class in the query set
+        x: sentence embedding
         return: logits, pred
         '''
         raise NotImplementedError
@@ -273,16 +272,18 @@ class FewShotNERModel(nn.Module):
 
 class ContinualNERFramework:
 
-    def __init__(self, train_data_loader, test_data_loader, viterbi=False, N=None, train_fname=None, tau=0.05, use_sampled_data=True):
+    def __init__(self, train_data_loader: dataloader, val_data_loader: dataloader, test_data_loader: dataloader, viterbi=False, N=None, train_fname=None, tau=0.05, use_sampled_data=True):
         '''
         train_data_loader: DataLoader for training.
+        val_data_loader: DataLoader for validating.
         test_data_loader: DataLoader for testing.
         '''
         self.train_data_loader = train_data_loader
+        self.val_data_loader = val_data_loader
         self.test_data_loader = test_data_loader
         self.viterbi = viterbi
         if viterbi:
-            abstract_transitions = get_abstract_transitions(train_fname)
+            abstract_transitions = get_abstract_transitions(train_fname, use_sampled_data=use_sampled_data)
             self.viterbi_decoder = ViterbiDecoder(N+2, abstract_transitions, tau)
     
     def __load_model__(self, ckpt):
@@ -308,8 +309,8 @@ class ContinualNERFramework:
             return x.item()
 
     def train(self,
-              model,
-              model_name,
+              model: NERModel,
+              model_name: str,
               learning_rate=1e-1,
               train_iter=30000,
               val_iter=1000,
@@ -321,22 +322,18 @@ class ContinualNERFramework:
               fp16=False,
               use_sgd_for_bert=False):
         '''
-        model: a FewShotREModel instance
+        model: a NERModel instance
         model_name: Name of the model
-        B: Batch size
-        N: Num of classes for each batch
-        K: Num of instances for each class in the support set
-        Q: Num of instances for each class in the query set
         ckpt_dir: Directory of checkpoints
         learning_rate: Initial learning rate
         train_iter: Num of iterations of training
         val_iter: Num of iterations of validating
         val_step: Validate every val_step steps
         '''
-        print("Start training...")
+        logger.info("Start training...")
     
         # Init optimizer
-        print('Use bert optim!')
+        logger.info('Use bert optim!')
         parameters_to_optimize = list(model.named_parameters())
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
         parameters_to_optimize = [
@@ -357,9 +354,9 @@ class ContinualNERFramework:
             own_state = model.state_dict()
             for name, param in state_dict.items():
                 if name not in own_state:
-                    print('ignore {}'.format(name))
+                    logger.info('ignore {}'.format(name))
                     continue
-                print('load {} from {}'.format(name, load_ckpt))
+                logger.info('load {} from {}'.format(name, load_ckpt))
                 own_state[name].copy_(param)
 
         if fp16:
@@ -378,7 +375,7 @@ class ContinualNERFramework:
 
         it = 0
         while it + 1 < train_iter:
-            for _, (support, query) in enumerate(self.train_data_loader):
+            for _, sample in enumerate(self.train_data_loader):
                 label = torch.cat(query['label'], 0)
                 if torch.cuda.is_available():
                     for k in support:
@@ -387,8 +384,8 @@ class ContinualNERFramework:
                             query[k] = query[k].cuda()
                     label = label.cuda()
 
-                logits, pred = model(support, query)
-                assert logits.shape[0] == label.shape[0], print(logits.shape, label.shape)
+                logits, pred = model(sample)
+                assert logits.shape[0] == label.shape[0], logger.debug(logits.shape, label.shape)
                 loss = model.loss(logits, label) / float(grad_iter)
                 tmp_pred_cnt, tmp_label_cnt, correct = model.metrics_by_entity(pred, label)
                     
@@ -434,8 +431,7 @@ class ContinualNERFramework:
                     break
                 it += 1
                 
-        print("\n####################\n")
-        print("Finish training " + model_name)
+        logger.info("Finish training " + model_name)
     
     def __get_emmissions__(self, logits, tags_list):
         # split [num_of_query_tokens, num_class] into [[num_of_token_in_sent, num_class], ...]
@@ -465,27 +461,23 @@ class ContinualNERFramework:
         return torch.tensor(pred).cuda()
 
     def eval(self,
-            model,
+            model: NERModel,
             eval_iter,
             ckpt=None): 
         '''
-        model: a FewShotREModel instance
-        B: Batch size
-        N: Num of classes for each batch
-        K: Num of instances for each class in the support set
-        Q: Num of instances for each class in the query set
+        model: a NERModel instance
         eval_iter: Num of iterations
         ckpt: Checkpoint path. Set as None if using current model parameters.
         return: Accuracy
         '''
-        print("")
+        logger.info('Start evaluating...')
         
         model.eval()
         if ckpt is None:
-            print("Use val dataset")
+            logger.info("Use val dataset")
             eval_dataset = self.val_data_loader
         else:
-            print("Use test dataset")
+            logger.info("Use test dataset")
             if ckpt != 'none':
                 state_dict = self.__load_model__(ckpt)['state_dict']
                 own_state = model.state_dict()
