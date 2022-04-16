@@ -9,7 +9,6 @@ apex
 *deprecated.py
 *.sh
 !download.sh
-data/
 *.zip
 
 
