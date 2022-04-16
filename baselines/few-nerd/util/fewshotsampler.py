@@ -95,7 +95,7 @@ class FewshotSampler:
         '''
         support_class = {'k':self.K}
         support_idx = []
-        query_class = {'q':self.Q}
+        query_class = {'k':self.Q}
         query_idx = []
         target_classes = random.sample(self.classes, self.N)
         candidates = self.__get_candidates__(target_classes)

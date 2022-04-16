@@ -1,7 +1,11 @@
 import torch
 import torch.utils.data as data
 import os
-from .fewshotsampler import FewshotSampler, FewshotSampleBase
+import sys
+sys.path.append('..')
+
+from transformers import BertTokenizer, PreTrainedTokenizer
+from fewshotsampler import FewshotSampler, FewshotSampleBase
 import numpy as np
 import json
 
@@ -67,6 +71,7 @@ class FewShotNERDatasetWithRandomSampling(data.Dataset):
     def __init__(self, filepath, tokenizer, N, K, Q, max_length, ignore_label_id=-1):
         if not os.path.exists(filepath):
             print("[ERROR] Data file does not exist!")
+            print(filepath)
             assert(0)
         self.class2sampleid = {}
         self.N = N
@@ -311,7 +316,7 @@ def collate_fn(data):
     return batch_support, batch_query
 
 def get_loader(filepath, tokenizer, N, K, Q, batch_size, max_length, 
-        num_workers=8, collate_fn=collate_fn, ignore_index=-1, use_sampled_data=True):
+        num_workers=8, collate_fn=collate_fn, ignore_index=-1, use_sampled_data=False):
     if not use_sampled_data:
         dataset = FewShotNERDatasetWithRandomSampling(filepath, tokenizer, N, K, Q, max_length, ignore_label_id=ignore_index)
     else:
@@ -323,3 +328,12 @@ def get_loader(filepath, tokenizer, N, K, Q, batch_size, max_length,
             num_workers=num_workers,
             collate_fn=collate_fn)
     return data_loader
+
+
+if __name__ == '__main__':
+    loader = get_loader(filepath='../data/supervised/train.txt', tokenizer=BertTokenizer.from_pretrained('bert-base-uncased'),N=5,K=10,Q=10,batch_size=5,max_length=50)
+    for i, batch in enumerate(loader):
+        with open('batch_example.log', 'w') as f:
+            f.writelines(str(batch))
+        break
+    
