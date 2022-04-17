@@ -483,7 +483,7 @@ class ContinualNERFramework:
             logger.info("Use val dataset")
             with torch.no_grad():
                 precision, recall, f1, fp, fn, within, outer = eval_one_loader(self.val_data_loader, eval_iter)
-                logger.info('[EVAL] [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
+                logger.info('[VAL] [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
                 return precision, recall, f1, fp, fn, within, outer
         else:
             logger.info("Use test dataset")

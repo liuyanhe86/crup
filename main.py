@@ -222,23 +222,22 @@ def main():
         logger.info(f'TRAIN CONFIG: model: {get_model_name(model)}, dataset: {dataset_path}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
         
         label_offset = 0
-        train_dataset = datautils.MultiNERDataset(tokenizer, max_length=args.max_length)
-        for task in multi_task_pathes:
-            label_offset += train_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'train.txt'), label_offset)
-        train_data_loader = datautils.get_loader(train_dataset, batch_size=args.batch_size)
-        
-        label_offset = 0
+        train_dataset = datautils.MultiNERDataset(tokenizer, max_length=args.max_length)  
         valid_dataset = datautils.MultiNERDataset(tokenizer, max_length=args.max_length)
-        for task in multi_task_pathes:
-            label_offset += valid_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'dev.txt'), label_offset)
-        val_data_loader = datautils.get_loader(valid_dataset, batch_size=args.batch_size)
-        
+        test_dataset = datautils.MultiNERDataset(tokenizer, max_length=args.max_length)
         task_id = 0
         test_data_loaders = {}
         result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in multi_task_pathes}
         for task in multi_task_pathes:
-            logger.info(f'start training [EPOCH] {task_id + 1}')
-            continual_framework = ContinualNERFramework(train_data_loader, val_data_loader, None)
+            type_set_size = train_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'train.txt'), label_offset)
+            train_data_loader = datautils.get_loader(train_dataset, batch_size=args.batch_size)
+            valid_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'dev.txt'), label_offset)
+            val_data_loader = datautils.get_loader(valid_dataset, batch_size=args.batch_size)
+            test_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'test.txt'), label_offset)
+            test_data_loader = datautils.get_loader(test_dataset, batch_size=args.batch_size)
+            test_data_loaders[task] = test_data_loader
+            logger.info(f'start training [TASK] {task}')
+            continual_framework = ContinualNERFramework(train_data_loader, val_data_loader, test_data_loaders)
             if torch.cuda.is_available():
                 model.cuda()
             load_ckpt = None
@@ -256,16 +255,9 @@ def main():
                             fp16=args.fp16,
                             use_sgd_for_bert=args.use_sgd)
             task_id += 1
-        label_offset = 0
-        for task in multi_task_pathes:
-            logger.info(f'start training [TASK] {task}')
-            test_dataset = datautils.ContinualNERDataset(os.path.join(dataset_path,  multi_task_pathes[task], 'test.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
-            label_offset += len(test_dataset.classes)
-            test_data_loader = datautils.get_loader(test_dataset, batch_size=args.batch_size)
-            test_data_loaders[task] = test_data_loader
-            continual_framework = ContinualNERFramework(None, None, test_data_loaders)
             # test
             continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt=ckpt)
+            label_offset += type_set_size
         logger.info('Multi-task finished successfully!')
         for task in result_dict:
             evals = result_dict[task]
