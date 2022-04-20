@@ -7,7 +7,6 @@ checkpoint/
 apex
 *.slurm
 *deprecated.py
-*.sh
 !download.sh
 *.zip
 
