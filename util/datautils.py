@@ -3,7 +3,7 @@ import numpy as np
 import os
 from typing import Dict, List, Tuple
 import torch
-import torch.utils.data
+from torch.utils.data import DataLoader, Dataset
 from transformers import BertTokenizer
 import sys
 sys.path.append('..')
@@ -82,7 +82,7 @@ class Sample(SampleBase):
         newlines = zip(self.words, self.tags)
         return '\n'.join(['\t'.join(line) for line in newlines])
 
-class NERDataset(torch.utils.data.Dataset):
+class NERDataset(Dataset):
     """
     NER Dataset
     """
@@ -242,7 +242,6 @@ class ContinualNERDataset(NERDataset):
         self.max_length = max_length
         self.ignore_label_id = ignore_label_id
     
-
 class MultiNERDataset(NERDataset):
     """
     Multi NER Dataset
@@ -272,9 +271,20 @@ class MultiNERDataset(NERDataset):
             self.label2tag[idx + label_offset + 1] = tag
         return len(classes)
 
+class MemoryBuffer(Dataset):
+    
+    def __init__(self) -> None:
+        super().__init__()
+        self.protos = {}
+    
+    def insert_proto(self, label, proto):
+        if label in self.protos:
+            raise KeyError(f'Prototype of label {label} is already in memory!')
+        else:
+            self.protos[label] = proto
 
-class MemoryBuffer:
-    pass
+    def get_protos(self):
+        return self.protos
     
 def collate_fn(data):
     batch = {'sentence': [], 'attention_mask': [], 'text_mask':[], 'label':[]}
@@ -289,7 +299,7 @@ def collate_fn(data):
     return batch
 
 def get_loader(dataset, batch_size):
-    data_loader = torch.utils.data.DataLoader(
+    data_loader = DataLoader(
         dataset=dataset,
         batch_size=batch_size,
         shuffle=True,

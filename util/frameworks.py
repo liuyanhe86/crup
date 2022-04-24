@@ -387,7 +387,11 @@ class ContinualNERFramework:
                 if (it + 1) % 100 == 0 or (it + 1) % val_step == 0:
                     precision = correct_cnt / pred_cnt
                     recall = correct_cnt / label_cnt
-                    f1 = 2 * precision * recall / (precision + recall)
+                    if precision + recall == 0:
+                        f1 = 0
+                        logger.warning('f1 compute failed!')
+                    else:
+                        f1 = 2 * precision * recall / (precision + recall)
                     logger.info('step: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
                         .format(it + 1, iter_loss/ iter_sample, precision, recall, f1) + '\r')
 
@@ -466,17 +470,37 @@ class ContinualNERFramework:
                         break
                     it += 1
 
-            precision = correct_cnt / pred_cnt
-            recall = correct_cnt /label_cnt
+            if pred_cnt == 0:
+                precision = 0
+                logger.warning('pred_cnt is 0!')
+            else:
+                precision = correct_cnt / pred_cnt
+            
+            if label_cnt == 0:
+                recall = 0
+                logger.warning('label_cnt is 0!')
+            else:
+                recall = correct_cnt /label_cnt
             if precision + recall != 0:
                 f1 = 2 * precision * recall / (precision + recall)
             else:
                 f1 = 0.0
                 logger.warning('P and R is 0! f1 compute failed!')
-            fp_error = fp_cnt / total_token_cnt
-            fn_error = fn_cnt / total_token_cnt
-            within_error = within_cnt / total_span_cnt
-            outer_error = outer_cnt / total_span_cnt
+            if total_token_cnt == 0:
+                fp_error = 0
+                fn_error = 0
+                logger.warning('total_token_cnt is 0!')
+            else:
+                fp_error = fp_cnt / total_token_cnt
+                fn_error = fn_cnt / total_token_cnt
+            if total_span_cnt == 0:
+                within_error = 0
+                outer_error = 0
+                logger.warning('total_span_cnt is 0!')
+            else:
+                within_error = within_cnt / total_span_cnt
+                outer_error = outer_cnt / total_span_cnt
+            
             return precision, recall, f1, fp_error, fn_error, within_error, outer_error
     
         if ckpt is None:

@@ -11,49 +11,9 @@ from transformers import BertTokenizer
 import util.datautils as datautils
 from util.frameworks import SupNERFramework, ContinualNERFramework
 from util.tasks import PROTOCOLS
-from model import BERTWordEncoder, NERModel, BertTagger, ProtoNet
+from model import BERTWordEncoder, BertTagger, ProtoNet
 
-def init_logging(filename):
-    transformers.logging.set_verbosity_error()
-    class TimeFilter(logging.Filter):
-        def filter(self, record):
-            try:
-                last = self.last
-            except AttributeError:
-                last = record.relativeCreated
-
-            delta = record.relativeCreated/1000 - last/1000
-            record.relative = "{:.1f}".format(delta)
-            record.uptime = str(datetime.timedelta(seconds=record.relativeCreated//1000))
-            self.last = record.relativeCreated
-            return True
-    
-    logging_format = "%(asctime)s - %(uptime)s - %(relative)ss - %(levelname)s - %(name)s - %(message)s"
-    logging.basicConfig(format=logging_format, filename=filename, filemode='w', level=logging.INFO)
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter(logging_format))
-    root_logger = logging.getLogger()
-    root_logger.addHandler(console_handler)
-    for handler in root_logger.handlers:
-        handler.addFilter(TimeFilter())
-
-def set_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    
-def get_model_name(model: NERModel):
-    if isinstance(model, BertTagger):
-        return 'BERT-Tagger'
-    elif isinstance(model, ProtoNet):
-        return 'ProtoNet'
-    else:
-        raise NotImplementedError
-
-
-def main():
+def get_args():
     parser = argparse.ArgumentParser(description="Continual NER")
     parser.add_argument('--dataset', dest="dataset", type=str, default='few-nerd',
             help='dataset name, must be in [few-nerd, stackoverflow]')
@@ -98,10 +58,53 @@ def main():
            help='use SGD instead of AdamW for BERT.')
     
     args = parser.parse_args()
+    return args
+
+def init_logging(filename):
+    transformers.logging.set_verbosity_error()
+    class TimeFilter(logging.Filter):
+        def filter(self, record):
+            try:
+                last = self.last
+            except AttributeError:
+                last = record.relativeCreated
+
+            delta = record.relativeCreated/1000 - last/1000
+            record.relative = "{:.1f}".format(delta)
+            record.uptime = str(datetime.timedelta(seconds=record.relativeCreated//1000))
+            self.last = record.relativeCreated
+            return True
+    
+    logging_format = "%(asctime)s - %(uptime)s - %(relative)ss - %(levelname)s - %(name)s - %(message)s"
+    logging.basicConfig(format=logging_format, filename=filename, filemode='w', level=logging.INFO)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(logging_format))
+    root_logger = logging.getLogger()
+    root_logger.addHandler(console_handler)
+    for handler in root_logger.handlers:
+        handler.addFilter(TimeFilter())
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+def get_model(args, word_encoder):
+    if args.model == 'ProtoNet':
+        model = ProtoNet(word_encoder, dot=args.dot)
+    elif args.model == 'Bert-Tagger':
+        model = BertTagger(word_encoder)
+    else:
+        raise NotImplementedError(f'Error: Model {args.model} not implemented!')
+    return model
+    
+
+def main():
+    args = get_args()
     set_seed(args.random_seed)
     
-    # now = datetime.datetime.now()
-    # {str(now.year)[-2:]}_{now.month}_{now.day}_{now.hour}_{now.minute}
     init_logging(f'log/{args.protocol}_{args.dataset}_{args.model}.log')
     logger = logging.getLogger(__name__)
     logger.info(f'PID: {os.getpid()}; PPID: {os.getppid()}')
@@ -109,11 +112,18 @@ def main():
     pretrain_ckpt = args.pretrain_ckpt
     word_encoder = BERTWordEncoder(pretrain_ckpt)
     tokenizer = BertTokenizer.from_pretrained(pretrain_ckpt)
-    
+
+    model = get_model(args, word_encoder)
+    dataset_path = os.path.join('data', args.dataset)
+
+    logger.info(f'EXP CONFIG: model: {args.model}, dataset: {dataset_path}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
+    if not os.path.exists('checkpoint'):
+        os.mkdir('checkpoint')
+    ckpt = f'checkpoint/{args.protocol}_{args.dataset}_{args.model}.pth.tar'
+    logger.info(f'model-save-path: {ckpt}')
+
     if args.protocol == 'sup':
-        model = ProtoNet(word_encoder, dot=args.dot)
         logger.info('loading data...')
-        dataset_path = os.path.join('data', args.dataset)
         
         train_dataset = datautils.NERDataset(os.path.join(dataset_path, 'supervised/train.txt'), tokenizer, max_length=args.max_length)
         valid_dataset = datautils.NERDataset(os.path.join(dataset_path, 'supervised/dev.txt'), tokenizer, max_length=args.max_length)
@@ -124,19 +134,13 @@ def main():
         test_data_loader = datautils.get_loader(test_dataset, batch_size=args.batch_size)
 
         sup_framework = SupNERFramework(train_data_loader, val_data_loader, test_data_loader)
-
-        if not os.path.exists('checkpoint'):
-            os.mkdir('checkpoint')
-        ckpt = f'checkpoint/{args.protocol}_{args.dataset}_{get_model_name(model)}.pth.tar'
-        
         logger.info(f'model-save-path: {ckpt}')
 
         if torch.cuda.is_available():
             model.cuda()
     
-        logger.info(f'TRAIN CONFIG: model: {get_model_name(model)}, dataset: {dataset_path}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
         sup_framework.train(model, 
-                            get_model_name(model),
+                            args.model,
                             load_ckpt=args.load_ckpt, 
                             save_ckpt=ckpt,
                             train_iter=args.train_iter,
@@ -152,21 +156,13 @@ def main():
         logger.info('RESULT: precision: %.4f, recall: %.4f, f1: %.4f' % (precision, recall, f1))
         logger.info('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f'%(fp, fn, within, outer))
     
-    elif args.protocol == 'fine-tune':
-        model = ProtoNet(word_encoder, dot=args.dot)
+    elif args.protocol == 'fine-tune' or 'fine-tune-fine':
         logger.info('loading data...')
-        dataset_path = os.path.join('data', args.dataset)
         fine_tune_task_pathes = PROTOCOLS[args.protocol + ' ' + args.dataset]
-        if not os.path.exists('checkpoint'):
-            os.mkdir('checkpoint')
-        ckpt = f'checkpoint/{args.protocol}_{args.dataset}_{get_model_name(model)}.pth.tar'
-        logger.info(f'model-save-path: {ckpt}')
         task_id = 0
         label_offset = 0
         test_loaders = {}
-        
-        logger.info(f'TRAIN CONFIG: model: {get_model_name(model)}, dataset: {dataset_path}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
-        
+                
         result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in fine_tune_task_pathes}
         for task in fine_tune_task_pathes:
             logger.info(f'start training [TASK] {task}')
@@ -189,7 +185,7 @@ def main():
             if task_id > 0:
                 load_ckpt = ckpt
             continual_framework.train(model, 
-                            get_model_name(model),
+                            args.model,
                             load_ckpt=load_ckpt, 
                             save_ckpt=ckpt,
                             train_iter=args.train_iter,
@@ -210,17 +206,9 @@ def main():
             logger.info(f'[RESULT] | {task}\n{result}')
 
     elif args.protocol == 'multi-task':
-        model = ProtoNet(word_encoder, dot=args.dot)
         logger.info('loading data...')
-        dataset_path = os.path.join('data', args.dataset)
         multi_task_pathes = PROTOCOLS[args.protocol + ' ' + args.dataset]
-        if not os.path.exists('checkpoint'):
-            os.mkdir('checkpoint')
-        ckpt = f'checkpoint/{args.protocol}_{args.dataset}_{get_model_name(model)}.pth.tar'
-        
-        logger.info(f'model-save-path: {ckpt}')
-        logger.info(f'TRAIN CONFIG: model: {get_model_name(model)}, dataset: {dataset_path}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
-        
+                
         label_offset = 0
         train_dataset = datautils.MultiNERDataset(tokenizer, max_length=args.max_length)  
         valid_dataset = datautils.MultiNERDataset(tokenizer, max_length=args.max_length)
@@ -244,7 +232,7 @@ def main():
             if task_id > 0:
                 load_ckpt = ckpt
             continual_framework.train(model, 
-                            get_model_name(model),
+                            args.model,
                             load_ckpt=load_ckpt, 
                             save_ckpt=ckpt,
                             train_iter=args.train_iter,
