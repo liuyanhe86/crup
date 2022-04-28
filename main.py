@@ -99,6 +99,18 @@ def get_model(args, word_encoder):
     else:
         raise NotImplementedError(f'Error: Model {args.model} not implemented!')
     return model
+
+def get_dataset_path(dataset):
+    if dataset == 'few-nerd':
+        return 'data/few-nerd'
+    elif dataset == 'coarse-few-nerd':
+        return 'data/few-nerd/coarse'
+    elif dataset == 'fine-few-nerd':
+        return 'data/few-nerd/fine'
+    elif dataset == 'stackoverflow':
+        return 'data/stackoverflow'
+    else:
+        raise ValueError(f'Unknown dataset {dataset}!')
     
 
 def main():
@@ -114,7 +126,7 @@ def main():
     tokenizer = BertTokenizer.from_pretrained(pretrain_ckpt)
 
     model = get_model(args, word_encoder)
-    dataset_path = os.path.join('data', args.dataset)
+    dataset_path = get_dataset_path(args.dataset)
 
     logger.info(f'EXP CONFIG: model: {args.model}, dataset: {dataset_path}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
     if not os.path.exists('checkpoint'):
@@ -156,19 +168,19 @@ def main():
         logger.info('RESULT: precision: %.4f, recall: %.4f, f1: %.4f' % (precision, recall, f1))
         logger.info('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f'%(fp, fn, within, outer))
     
-    elif args.protocol == 'fine-tune' or 'fine-tune-fine':
+    elif args.protocol == 'fine-tune':
         logger.info('loading data...')
-        fine_tune_task_pathes = PROTOCOLS[args.protocol + ' ' + args.dataset]
+        fine_tune_tasks = PROTOCOLS[args.protocol + ' ' + args.dataset]
         task_id = 0
         label_offset = 0
         test_loaders = {}
                 
-        result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in fine_tune_task_pathes}
-        for task in fine_tune_task_pathes:
+        result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in fine_tune_tasks}
+        for task in fine_tune_tasks:
             logger.info(f'start training [TASK] {task}')
-            train_dataset = datautils.ContinualNERDataset(os.path.join(dataset_path, fine_tune_task_pathes[task], 'train.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
-            valid_dataset = datautils.ContinualNERDataset(os.path.join(dataset_path, fine_tune_task_pathes[task], 'dev.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
-            test_dataset = datautils.ContinualNERDataset(os.path.join(dataset_path,  fine_tune_task_pathes[task], 'test.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
+            train_dataset = datautils.ContinualNERDataset(os.path.join(dataset_path, fine_tune_tasks[task], 'train.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
+            valid_dataset = datautils.ContinualNERDataset(os.path.join(dataset_path, fine_tune_tasks[task], 'dev.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
+            test_dataset = datautils.ContinualNERDataset(os.path.join(dataset_path,  fine_tune_tasks[task], 'test.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
             label_offset += len(train_dataset.classes)
 
             train_data_loader = datautils.get_loader(train_dataset, batch_size=args.batch_size)
@@ -200,10 +212,12 @@ def main():
             continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt=ckpt)
             task_id += 1
         logger.info('Fine-tune finished successfully!')
-        for task in result_dict:
-            evals = result_dict[task]
-            result = '\n'.join([f'{item}:{value}' for item, value in evals.items()])
-            logger.info(f'[RESULT] | {task}\n{result}')
+        with open(os.path.join('output', f'{args.protocol}_{args.dataset}_{args.model}'), 'a') as file:
+            file.write(str(datetime.datetime.now()) + '\n')
+            for task in result_dict:
+                task_f1 = ','.join(result_dict[task]['f1'])
+                file.write(task_f1 + '\n')
+
 
     elif args.protocol == 'multi-task':
         logger.info('loading data...')
@@ -247,10 +261,11 @@ def main():
             continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt=ckpt)
             label_offset += type_set_size
         logger.info('Multi-task finished successfully!')
-        for task in result_dict:
-            evals = result_dict[task]
-            result = '\n'.join([f'{item}:{value}' for item, value in evals.items()])
-            logger.info(f'[RESULT] | {task}\n{result}')
+        with open(os.path.join('output', f'{args.protocol}_{args.dataset}_{args.model}'), 'a') as file:
+            file.write(str(datetime.datetime.now()) + '\n')
+            for task in result_dict:
+                task_f1 = ','.join(result_dict[task]['f1'])
+                file.write(task_f1 + '\n')
         
 
 if __name__ == '__main__':
