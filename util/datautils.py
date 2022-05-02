@@ -304,7 +304,7 @@ def get_loader(dataset, batch_size):
         batch_size=batch_size,
         shuffle=True,
         pin_memory=True,
-        num_workers=8,
+        num_workers=4,
         collate_fn=collate_fn
     )
     return data_loader

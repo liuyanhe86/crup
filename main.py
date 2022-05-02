@@ -211,11 +211,20 @@ def main():
             # test
             continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt=ckpt)
             task_id += 1
+            logger.info(f'[PROGRESS] ({task_id}/{len(fine_tune_tasks)})')
         logger.info('Fine-tune finished successfully!')
-        with open(os.path.join('output', f'{args.protocol}_{args.dataset}_{args.model}'), 'a') as file:
+        output_dir = f'output/{args.protocol}_{args.dataset}_{args.model}'
+        if not os.path.exists(output_dir):
+            os.mkdir(output_dir)
+        with open(os.path.join(output_dir, 'precision'), 'a') as file:
             file.write(str(datetime.datetime.now()) + '\n')
             for task in result_dict:
-                task_f1 = ','.join(result_dict[task]['f1'])
+                task_precision = ','.join([str(_) for _ in result_dict[task]['precision']])
+                file.write(task_precision + '\n')
+        with open(os.path.join(output_dir, 'f1'), 'a') as file:
+            file.write(str(datetime.datetime.now()) + '\n')
+            for task in result_dict:
+                task_f1 = ','.join([str(_) for _ in result_dict[task]['f1']])
                 file.write(task_f1 + '\n')
 
 
@@ -256,15 +265,24 @@ def main():
                             grad_iter=args.grad_iter,
                             fp16=args.fp16,
                             use_sgd_for_bert=args.use_sgd)
-            task_id += 1
             # test
             continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt=ckpt)
             label_offset += type_set_size
+            task_id += 1
+            logger.info(f'[PROGRESS] ({task_id}/{len(multi_task_pathes)})')
         logger.info('Multi-task finished successfully!')
-        with open(os.path.join('output', f'{args.protocol}_{args.dataset}_{args.model}'), 'a') as file:
+        output_dir = f'output/{args.protocol}_{args.dataset}_{args.model}'
+        if not os.path.exists(output_dir):
+            os.mkdir(output_dir)
+        with open(os.path.join(output_dir, 'precision'), 'a') as file:
             file.write(str(datetime.datetime.now()) + '\n')
             for task in result_dict:
-                task_f1 = ','.join(result_dict[task]['f1'])
+                task_precision = ','.join([str(_) for _ in result_dict[task]['precision']])
+                file.write(task_precision + '\n')
+        with open(os.path.join(output_dir, 'f1'), 'a') as file:
+            file.write(str(datetime.datetime.now()) + '\n')
+            for task in result_dict:
+                task_f1 = ','.join([str(_) for _ in result_dict[task]['f1']])
                 file.write(task_f1 + '\n')
         
 
