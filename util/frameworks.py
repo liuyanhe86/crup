@@ -354,6 +354,7 @@ class ContinualNERFramework:
 
         it = 0
         while it + 1 < train_iter:
+            best_count = 0
             for _, batch in enumerate(self.train_data_loader):
                 label = torch.cat(batch['label'], 0)
                 if torch.cuda.is_available():
@@ -363,7 +364,6 @@ class ContinualNERFramework:
                     label = label.cuda()
 
                 logits, pred = model(batch)
-                # logger.info(f'logits.shape: {logits.shape}; label.shape: {label.shape}')
                 assert logits.shape[0] == label.shape[0]
                 loss = model.loss(logits, label) / float(grad_iter)
                 tmp_pred_cnt, tmp_label_cnt, correct = model.metrics_by_entity(pred, label)

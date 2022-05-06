@@ -120,9 +120,9 @@ STACKOVERFLOW_DISJOINT = {
 }
 
 PROTOCOLS = {
-    'fine-tune coarse-few-nerd': FEW_NERD_COARSE_DISJOINT,
-    'fine-tune fine-few-nerd': FEW_NERD_FINE_DISJOINT,
-    'fine-tune stackoverflow': STACKOVERFLOW_DISJOINT,
+    'CI coarse-few-nerd': FEW_NERD_COARSE_DISJOINT,
+    'CI fine-few-nerd': FEW_NERD_FINE_DISJOINT,
+    'CI stackoverflow': STACKOVERFLOW_DISJOINT,
     'multi-task coarse-few-nerd': FEW_NERD_COARSE_DISJOINT,
     'multi-task fine-few-nerd': FEW_NERD_FINE_DISJOINT,
     'multi-task stackoverflow': STACKOVERFLOW_DISJOINT

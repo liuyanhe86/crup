@@ -11,14 +11,14 @@ from transformers import BertTokenizer
 import util.datautils as datautils
 from util.frameworks import SupNERFramework, ContinualNERFramework
 from util.tasks import PROTOCOLS
-from model import BERTWordEncoder, BertTagger, ProtoNet
+from model import BERTWordEncoder, BertTagger, CPR, ProtoNet
 
 def get_args():
     parser = argparse.ArgumentParser(description="Continual NER")
     parser.add_argument('--dataset', dest="dataset", type=str, default='few-nerd',
             help='dataset name, must be in [few-nerd, stackoverflow]')
     parser.add_argument('--protocol', dest="protocol", type=str, default='sup',
-            help='continual learning protocol, must be in [sup, fine-tune, CI, online, multi-task]')
+            help='continual learning protocol, must be in [sup, CI, online, multi-task]')
     parser.add_argument('--model', dest="model", type=str, default='ProtoNet',
             help='model name, must be in [CPR, ProtoNet, BERT-Tagger]')
     parser.add_argument('--batch_size', default=10, type=int,
@@ -53,6 +53,9 @@ def get_args():
     # only for prototypical networks
     parser.add_argument('--dot', action='store_true', 
            help='use dot instead of L2 distance for proto')
+    # only for CPR
+    parser.add_argument('--temperature', type=float, default=0.1, 
+           help='temperature for supervised contrastive loss')
     # experiment
     parser.add_argument('--use_sgd', action='store_true',
            help='use SGD instead of AdamW for BERT.')
@@ -96,6 +99,8 @@ def get_model(args, word_encoder):
         model = ProtoNet(word_encoder, dot=args.dot)
     elif args.model == 'Bert-Tagger':
         model = BertTagger(word_encoder)
+    elif args.model == 'CPR':
+        model = CPR(word_encoder, temperature=args.temperature)
     else:
         raise NotImplementedError(f'Error: Model {args.model} not implemented!')
     return model
@@ -168,7 +173,7 @@ def main():
         logger.info('RESULT: precision: %.4f, recall: %.4f, f1: %.4f' % (precision, recall, f1))
         logger.info('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f'%(fp, fn, within, outer))
     
-    elif args.protocol == 'fine-tune':
+    elif args.protocol == 'CI':
         logger.info('loading data...')
         fine_tune_tasks = PROTOCOLS[args.protocol + ' ' + args.dataset]
         task_id = 0
