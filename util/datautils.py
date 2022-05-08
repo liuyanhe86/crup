@@ -225,6 +225,9 @@ class NERDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    def get_label_set(self):
+        return set(self.label2tag.keys())
+
 class ContinualNERDataset(NERDataset):
     """
     Continual NER Dataset
@@ -270,21 +273,6 @@ class MultiNERDataset(NERDataset):
             self.tag2label[tag] = idx + label_offset + 1
             self.label2tag[idx + label_offset + 1] = tag
         return len(classes)
-
-class MemoryBuffer(Dataset):
-    
-    def __init__(self) -> None:
-        super().__init__()
-        self.protos = {}
-    
-    def insert_proto(self, label, proto):
-        if label in self.protos:
-            raise KeyError(f'Prototype of label {label} is already in memory!')
-        else:
-            self.protos[label] = proto
-
-    def get_protos(self):
-        return self.protos
     
 def collate_fn(data):
     batch = {'sentence': [], 'attention_mask': [], 'text_mask':[], 'label':[]}

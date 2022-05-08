@@ -24,23 +24,19 @@ class ProtoNet(NERModel):
         return self.__dist__(proto.unsqueeze(0), embedding.unsqueeze(1), 2)
 
     def __get_proto__(self, embedding, tag, text_mask):
+        tag = torch.cat(tag, 0)
+        tag_set = set([int(_) for _ in tag.tolist()]) - {self.ignore_index}
         proto = []
-        # text_mask.shape: [batch_size, max_len]
-        # before: embedding.shape: [batch_size, max_len, 768]
-        embedding = embedding[text_mask==1].view(-1, embedding.size(-1))
-        # after: embedding.shape: [num_of_tokens_within_batch, 768]
-        tag = torch.cat(tag, 0)  # [num_of_tokens_within_batch]
+        index2tag = {}
+        index = 0
         assert tag.size(0) == embedding.size(0)
-        for label in range(torch.max(tag) + 1):
-            # logger.info(f'__get_proto__: {label} embeddings shape:{embedding[tag==label].shape}; isnan:{embedding[tag==label].isnan()}')
-            mean = torch.mean(embedding[tag==label], 0)
-            if not torch.isnan(mean).any():
-                # logger.info(f'__get_proto__: mean: {mean}')
-                proto.append(mean)
-            else:
-                proto.append(torch.zeros(embedding.size(-1)).cuda())
-        proto = torch.stack(proto)  # [class_num, 768]
-        return proto
+        for label in tag_set:
+            mean = torch.mean(embedding[tag==label], dim=0)
+            proto.append(mean)
+            index2tag[index] = label
+            index += 1
+        proto = torch.stack(proto, 0)
+        return 
 
     def forward(self, sample):
         sample_emb = self.word_encoder(sample['sentence'], sample['attention_mask'])

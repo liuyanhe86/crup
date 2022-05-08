@@ -75,14 +75,8 @@ class SupNERFramework:
         logger.info("Start training...")
     
         # Init optimizer
-        parameters_to_optimize = list(model.named_parameters())
-        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-        parameters_to_optimize = [
-            {'params': [p for n, p in parameters_to_optimize 
-                if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-            {'params': [p for n, p in parameters_to_optimize
-                if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-        ]
+        parameters_to_optimize = model.get_parameters_to_optimize()
+
         if use_sgd_for_bert:
             logger.info('Optimizer: SGD')
             optimizer = torch.optim.SGD(parameters_to_optimize, lr=learning_rate)
@@ -117,7 +111,8 @@ class SupNERFramework:
         correct_cnt = 0
 
         it = 0
-        while it + 1 < train_iter:
+        best_count = 0
+        while it + 1 < train_iter and best_count < 3:
             for _, batch in enumerate(self.train_data_loader):
                 label = torch.cat(batch['label'], 0)
                 if torch.cuda.is_available():
@@ -162,6 +157,8 @@ class SupNERFramework:
                         logger.info('Best checkpoint')
                         torch.save({'state_dict': model.state_dict()}, save_ckpt)
                         best_f1 = f1
+                        best_count = 0
+                    best_count += 1
                     iter_loss = 0.
                     iter_sample = 0.
                     pred_cnt = 0
@@ -171,7 +168,8 @@ class SupNERFramework:
                 if (it + 1)  == train_iter:
                     break
                 it += 1
-                
+        if it + 1 < train_iter:
+            logger.info('Early stop')
         logger.info(f'Finish training {model_name}.')
 
 
@@ -311,15 +309,8 @@ class ContinualNERFramework:
         '''
         logger.info("Start training...")
     
-        # Init optimizer
-        parameters_to_optimize = list(model.named_parameters())
-        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-        parameters_to_optimize = [
-            {'params': [p for n, p in parameters_to_optimize 
-                if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-            {'params': [p for n, p in parameters_to_optimize
-                if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-        ]
+        parameters_to_optimize = model.get_parameters_to_optimize()
+        
         if use_sgd_for_bert:
             logger.info('Optimizer: SGD')
             optimizer = torch.optim.SGD(parameters_to_optimize, lr=learning_rate)
@@ -328,15 +319,15 @@ class ContinualNERFramework:
             optimizer = AdamW(parameters_to_optimize, lr=learning_rate, correct_bias=False)
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_step, num_training_steps=train_iter) 
         
-        # load model
-        if load_ckpt:
-            state_dict = self.__load_model__(load_ckpt)['state_dict']
-            own_state = model.state_dict()
-            for name, param in state_dict.items():
-                if name not in own_state:
-                    continue
-                own_state[name].copy_(param)
-            logger.info(f'checkpoint {load_ckpt} loaded successfully')
+        # # load model
+        # if load_ckpt:
+        #     state_dict = self.__load_model__(load_ckpt)['state_dict']
+        #     own_state = model.state_dict()
+        #     for name, param in state_dict.items():
+        #         if name not in own_state:
+        #             continue
+        #         own_state[name].copy_(param)
+        #     logger.info(f'checkpoint {load_ckpt} loaded successfully')
 
         if fp16:
             from apex import amp
@@ -353,8 +344,8 @@ class ContinualNERFramework:
         correct_cnt = 0
 
         it = 0
-        while it + 1 < train_iter:
-            best_count = 0
+        best_count = 0
+        while it + 1 < train_iter and best_count < 3:
             for _, batch in enumerate(self.train_data_loader):
                 label = torch.cat(batch['label'], 0)
                 if torch.cuda.is_available():
@@ -402,6 +393,8 @@ class ContinualNERFramework:
                         logger.info('Best checkpoint')
                         torch.save({'state_dict': model.state_dict()}, save_ckpt)
                         best_f1 = f1
+                        best_count = 0
+                    best_count += 1
                     iter_loss = 0.
                     iter_sample = 0.
                     pred_cnt = 0
@@ -411,7 +404,8 @@ class ContinualNERFramework:
                 if (it + 1)  == train_iter:
                     break
                 it += 1
-                
+        if it + 1 < train_iter:
+            logger.info('Early stop!')
         logger.info(f'Finish training {model_name}.')
 
     def eval(self,
@@ -518,14 +512,15 @@ class ContinualNERFramework:
                     if name not in own_state:
                         continue
                     own_state[name].copy_(param)
-            for task in self.test_data_loaders:
-                precision, recall, f1, fp, fn, within, outer = eval_one_loader(self.test_data_loaders[task], eval_iter)
-                logger.info('[TEST] %s | RESULT: precision: %.4f, recall: %.4f, f1: %.4f \n ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f' % (task, precision, recall, f1, fp, fn, within, outer))
-                result_dict[task]['precision'].append(precision)
-                result_dict[task]['recall'].append(recall)
-                result_dict[task]['f1'].append(f1)
-                result_dict[task]['fp_error'].append(fp)
-                result_dict[task]['fn_error'].append(fn)
-                result_dict[task]['within_error'].append(within)
-                result_dict[task]['outer_error'].append(outer)
+            with torch.no_grad():
+                for task in self.test_data_loaders:
+                    precision, recall, f1, fp, fn, within, outer = eval_one_loader(self.test_data_loaders[task], eval_iter)
+                    logger.info('[TEST] %s | RESULT: precision: %.4f, recall: %.4f, f1: %.4f \n ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f' % (task, precision, recall, f1, fp, fn, within, outer))
+                    result_dict[task]['precision'].append(precision)
+                    result_dict[task]['recall'].append(recall)
+                    result_dict[task]['f1'].append(f1)
+                    result_dict[task]['fp_error'].append(fp)
+                    result_dict[task]['fn_error'].append(fn)
+                    result_dict[task]['within_error'].append(within)
+                    result_dict[task]['outer_error'].append(outer)
                 

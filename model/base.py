@@ -16,6 +16,16 @@ class NERModel(nn.Module):
         self.word_encoder = nn.DataParallel(my_word_encoder)
         self.cost = nn.CrossEntropyLoss(ignore_index=ignore_index)
 
+    def get_parameters_to_optimize(self):
+        parameters_to_optimize = list(self.named_parameters())
+        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+        parameters_to_optimize = [
+            {'params': [p for n, p in parameters_to_optimize 
+                if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+            {'params': [p for n, p in parameters_to_optimize
+                if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+        return parameters_to_optimize
     
     def forward(self, x):
         '''
@@ -162,7 +172,7 @@ class NERModel(nn.Module):
             cnt += len(list(set(label_span[label]).intersection(set(outer_pred_span))))
         return cnt
 
-    def __get_type_error__(self, pred, label, sample):
+    def __get_type_error__(self, pred, sample):
         '''
         return finegrained type error cnt, coarse type error cnt and total correct span count
         '''
@@ -203,5 +213,5 @@ class NERModel(nn.Module):
         fn = torch.sum(((pred == 0) & (label > 0)).type(torch.FloatTensor))
         pred = pred.cpu().numpy().tolist()
         label = label.cpu().numpy().tolist()
-        within, outer, total_span = self.__get_type_error__(pred, label, sample)
+        within, outer, total_span = self.__get_type_error__(pred, sample)
         return fp, fn, len(pred), within, outer, total_span
