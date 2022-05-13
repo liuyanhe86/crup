@@ -6,8 +6,9 @@ import random
 import numpy as np
 import torch
 import transformers
-from transformers import BertTokenizer
 
+from torch import nn, softmax
+from transformers import BertTokenizer
 import util.datautils as datautils
 from util.frameworks import SupNERFramework, ContinualNERFramework
 from util.tasks import PROTOCOLS
@@ -125,8 +126,12 @@ def get_dataset_path(dataset):
 def main():
     args = get_args()
     set_seed(args.random_seed)
-    
-    init_logging(f'log/{args.protocol}_{args.dataset}_{args.model}.log')
+    if not os.path.exists('log'):
+        os.mkdir('log')
+    if args.dot:
+        init_logging(f'log/{args.protocol}_{args.dataset}_{args.model}_dot.log')
+    else:
+        init_logging(f'log/{args.protocol}_{args.dataset}_{args.model}.log')    
     logger = logging.getLogger(__name__)
     logger.info(f'PID: {os.getpid()}; PPID: {os.getppid()}')
     logger.info('loading model and tokenizer...')
@@ -139,10 +144,13 @@ def main():
         model.cuda()
     dataset_path = get_dataset_path(args.dataset)
 
-    logger.info(f'EXP CONFIG: model: {args.model}, dataset: {dataset_path}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
+    logger.info(f'EXP CONFIG: model: {args.model}, dataset: {args.dataset}, protocol: {args.protocol}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
     if not os.path.exists('checkpoint'):
         os.mkdir('checkpoint')
-    ckpt = f'checkpoint/{args.protocol}_{args.dataset}_{args.model}.pth.tar'
+    if args.dot:
+        ckpt = f'checkpoint/{args.protocol}_{args.dataset}_{args.model}_dot.pth.tar'
+    else:
+        ckpt = f'checkpoint/{args.protocol}_{args.dataset}_{args.model}.pth.tar'
     logger.info(f'model-save-path: {ckpt}')
 
     if args.protocol == 'sup':
@@ -155,7 +163,13 @@ def main():
         train_data_loader = datautils.get_loader(train_dataset, batch_size=args.batch_size)
         val_data_loader = datautils.get_loader(valid_dataset, batch_size=args.batch_size)
         test_data_loader = datautils.get_loader(test_dataset, batch_size=args.batch_size)
-
+        if args.model == 'Bert-Tagger':
+            lc = nn.Linear(in_features=word_encoder.output_dim, 
+                            out_features=100) # len(train_dataset.get_label_set())
+            if torch.cuda.is_available():
+                model.add_module('lc', lc.cuda())
+            else:
+                model.add_module('lc', lc)
         sup_framework = SupNERFramework(train_data_loader, val_data_loader, test_data_loader)
         if not args.only_test:
             logger.info('start training')
@@ -194,9 +208,6 @@ def main():
             val_data_loader = datautils.get_loader(valid_dataset, batch_size=args.batch_size)
             test_data_loader = datautils.get_loader(test_dataset, batch_size=args.batch_size)
             test_loaders[task] = test_data_loader
-            # if args.model == 'CPR':
-            #     label_set = train_dataset.get_label_set()
-            #     model.add_heads(label_set)
             continual_framework = ContinualNERFramework(train_data_loader, val_data_loader, test_loaders)
 
             if not args.only_test and task_id >= args.start_task:

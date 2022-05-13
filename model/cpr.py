@@ -12,11 +12,11 @@ class CPR(NERModel):
     def __init__(self, word_encoder, protocol='CI', temperature=0.5, embedding_dim=64):
         NERModel.__init__(self, word_encoder)
         self.drop = nn.Dropout()
-        self.proj_head = nn.Sequential(
-            nn.Linear(in_features=word_encoder.output_dim, out_features=word_encoder.output_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=word_encoder.output_dim, out_features=64)
-        )
+        # self.proj_head = nn.Sequential(
+        #     nn.Linear(in_features=word_encoder.output_dim, out_features=word_encoder.output_dim),
+        #     nn.ReLU(inplace=True),
+        #     nn.Linear(in_features=word_encoder.output_dim, out_features=64)
+        # )
         self.global_protos = {}
         self.protocol = protocol
         self.temperature = temperature
@@ -46,15 +46,15 @@ class CPR(NERModel):
             mean = torch.mean(embedding[tag==label], dim=0)
             if label not in self.global_protos:
                 self.global_protos[label] = mean
+                # local_proto.append(mean)
             else:
                 new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
-                # new_proto = F.normalize(new_proto, p=2, dim=0)
                 self.global_protos[label] = new_proto
             local_proto.append(mean)
             index2tag[index] = label
             index += 1
         local_proto = torch.stack(local_proto, 0)
-        if self.protocol == 'CI' or self.protocol == 'sup':
+        if self.protocol == 'CI':
             return index2tag, local_proto
         else:
             return index2tag, self.global_protos
@@ -68,7 +68,7 @@ class CPR(NERModel):
         _, pred = torch.max(logits, 1)
         for index in index2tag:
             pred[pred == index] = index2tag[index]
-        embedding = self.proj_head(embedding)  # [batch_size, max_len, 64]
+        # embedding = self.proj_head(embedding)  # [batch_size, max_len, 64]
         embedding = F.normalize(embedding, p=2, dim=1)
         # logger.info(f'embedding.shape: {embedding.shape}; logits.shape: {logits.shape}; pred.shape: {pred.shape}')
         return embedding, pred

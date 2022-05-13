@@ -9,11 +9,10 @@ logger = logging.getLogger(__name__)
 
 class BertTagger(NERModel):
     
-    def __init__(self, word_encoder, class_num=100):
+    def __init__(self, word_encoder):
         NERModel.__init__(self, word_encoder)
         self.drop = nn.Dropout()
-        self.lc = nn.Linear(in_features=word_encoder.output_dim, out_features=class_num)
-        
+
     def forward(self, sample):
         sample_emb = self.word_encoder(sample['sentence'], sample['attention_mask'])
         sample_emb = self.drop(sample_emb)  # [batch_size, max_len, 768]
