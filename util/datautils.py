@@ -262,17 +262,21 @@ class MultiNERDataset(NERDataset):
     def append(self, file_path: str, label_offset: int=0):
         '''
         Append new dataset
-        return: type set size of appended dataset
+        return: size of unseen type set
         '''
         if not os.path.exists(file_path):
             logger.error(f"[ERROR] Data file {file_path} does not exist!")
             assert(0)
         samples, classes = self.__load_data_from_file__(file_path)
         self.samples.extend(samples)
-        for idx, tag in enumerate(list(classes)):
-            self.tag2label[tag] = idx + label_offset + 1
-            self.label2tag[idx + label_offset + 1] = tag
-        return len(classes)
+        offset, idx = 0, 0
+        for tag in classes:
+            if tag not in self.tag2label:
+                self.tag2label[tag] = idx + label_offset + 1
+                self.label2tag[idx + label_offset + 1] = tag
+                idx += 1
+                offset += 1
+        return offset
     
 def collate_fn(data):
     batch = {'sentence': [], 'attention_mask': [], 'text_mask':[], 'label':[]}

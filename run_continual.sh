@@ -3,10 +3,12 @@ export CUDA_VISIBLE_DEVICES=0
 python main.py \
         --dataset coarse-few-nerd \
         --protocol CI \
-        --model ProtoNet \
+        --model CPR \
         --use_sgd \
-        --lr 2e-5
-        # --only_test
+        --lr 5e-2 \
+        --contrast_proto
+#         --dot \
+#         --only_test
 # python main.py \
 #         --dataset fine-few-nerd \
 #         --protocol CI \ 

@@ -84,7 +84,6 @@ class SupNERFramework:
             logger.info('Optimizer: AdamW')
             optimizer = AdamW(parameters_to_optimize, lr=learning_rate, correct_bias=False)
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_step, num_training_steps=train_iter) 
-        
         # load model
         if load_ckpt:
             state_dict = self.__load_model__(load_ckpt)['state_dict']
@@ -523,4 +522,108 @@ class ContinualNERFramework:
                     result_dict[task]['fn_error'].append(fn)
                     result_dict[task]['within_error'].append(within)
                     result_dict[task]['outer_error'].append(outer)
+
+class OnlineFramework:
+
+    def __init__(self, data_loader: DataLoader):
+        self.data_loader = data_loader
+
+    def __load_model__(self, ckpt):
+        '''
+        ckpt: Path of the checkpoint
+        return: Checkpoint dict
+        '''
+        if os.path.isfile(ckpt):
+            checkpoint = torch.load(ckpt)
+            logger.info("Successfully loaded checkpoint '%s'" % ckpt)
+            return checkpoint
+        else:
+            raise Exception("No checkpoint found at '%s'" % ckpt)
+    
+    def item(self, x):
+        '''
+        PyTorch before and after 0.4
+        '''
+        torch_version = torch.__version__.split('.')
+        if int(torch_version[0]) == 0 and int(torch_version[1]) < 4:
+            return x[0]
+        else:
+            return x.item()
+
+    def learn(self,
+              model: NERModel,
+              model_name: str,
+              save_ckpt=None,
+              learning_rate=1e-1,
+              val_iter=10,
+              grad_iter=1,
+              fp16=False,
+              use_sgd_for_bert=True):
+        '''
+        model: a NERModel instance
+        model_name: Name of the model
+        learning_rate: Initial learning rate
+        '''
+        logger.info("Start online learning...")
+    
+        # Init optimizer
+        parameters_to_optimize = model.get_parameters_to_optimize()
+
+        if use_sgd_for_bert:
+            logger.info('Optimizer: SGD')
+            optimizer = torch.optim.SGD(parameters_to_optimize, lr=learning_rate)
+        else:
+            logger.info('Optimizer: AdamW')
+            optimizer = AdamW(parameters_to_optimize, lr=learning_rate, correct_bias=False)        
+        if fp16:
+            from apex import amp
+            model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
+
+        model.train()
+        # Training
+        iter_loss = 0.0
+        iter_sample = 0
+        pred_cnt = 0
+        label_cnt = 0
+        correct_cnt = 0
+        it = 0
+        for _, batch in enumerate(self.data_loader):
+            label = torch.cat(batch['label'], 0)
+            if torch.cuda.is_available():
+                for k in batch:
+                    if k != 'label' and k != 'label2tag':
+                        batch[k] = batch[k].cuda()
+                label = label.cuda()
+            logits, pred = model(batch)
+            assert logits.shape[0] == label.shape[0]
+            loss = model.loss(logits, label) / float(grad_iter)
+            tmp_pred_cnt, tmp_label_cnt, correct = model.metrics_by_entity(pred, label)
                 
+            if fp16:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            iter_loss += self.item(loss.data)
+            pred_cnt += tmp_pred_cnt
+            label_cnt += tmp_label_cnt
+            correct_cnt += correct
+            iter_sample += 1
+            
+            precision = correct_cnt / pred_cnt
+            recall = correct_cnt / label_cnt
+            f1 = 2 * precision * recall / (precision + recall)
+            if (it + 1) % val_iter == 0:
+                logger.info('step: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
+                    .format(it + 1, iter_loss/ iter_sample, precision, recall, f1) + '\r')
+                iter_loss = 0.
+                iter_sample = 0.
+                pred_cnt = 0
+                label_cnt = 0
+                correct_cnt = 0
+            it += 1
+        torch.save({'state_dict': model.state_dict()}, save_ckpt)
+        logger.info(f'Finish learning {model_name}.')

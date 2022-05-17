@@ -4,21 +4,24 @@ export CUDA_VISIBLE_DEVICES=0
 #         --dataset few-nerd \
 #         --protocol sup \
 #         --model Bert-Tagger \
+#         --batch_size 32 \
 #         --use_sgd \
-#         --lr 1e-2
+#         --lr 5e-3
 
 python main.py \
         --dataset few-nerd \
         --protocol sup \
         --model ProtoNet \
+        --batch_size 32 \
         --use_sgd \
         --lr 2e-5 \
-        # --dot
+        --dot
 
-# python main.py \
-#         --dataset few-nerd \
-#         --protocol sup \
-#         --model CPR \
-#         --use_sgd \
-#         --lr 0.075 \
-        # --only_test
+python main.py \
+        --dataset few-nerd \
+        --protocol sup \
+        --model CPR \
+        --batch_size 32 \
+        --use_sgd \
+        --lr 5e-3 \
+#         --dot
