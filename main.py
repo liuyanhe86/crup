@@ -7,64 +7,58 @@ import numpy as np
 import torch
 import transformers
 
-from torch import nn, softmax
-from transformers import BertTokenizer
-from util.datautils import get_loader, NERDataset, ContinualNERDataset, MultiNERDataset
-from util.frameworks import OnlineFramework, SupNERFramework, ContinualNERFramework
-from util.tasks import PROTOCOLS
-from model import BERTWordEncoder, BertTagger, CPR, ProtoNet
+from util.settings import CiSetting, MultiTaskSetting, OnlineSetting, SupervisedSetting
 
 def get_args():
     parser = argparse.ArgumentParser(description="Continual NER")
     parser.add_argument('--dataset', dest="dataset", type=str, default='few-nerd',
             help='dataset name, must be in [few-nerd, stackoverflow]')
-    parser.add_argument('--protocol', dest="protocol", type=str, default='sup',
-            help='continual learning protocol, must be in [sup, CI, online, multi-task]')
+    parser.add_argument('--setting', dest="setting", type=str, default='sup',
+            help='continual learning setting, must be in [sup, CI, online, multi-task]')
     parser.add_argument('--model', dest="model", type=str, default='ProtoNet',
             help='model name, must be in [CPR, ProtoNet, BERT-Tagger]')
     parser.add_argument('--batch_size', default=10, type=int,
             help='batch size')
-    parser.add_argument('--train_iter', default=10000, type=int,
+    parser.add_argument('--train_epoch', default=10, type=int,
             help='num of iters in training')
-    parser.add_argument('--val_iter', default=1000, type=int,
-            help='num of iters in validation')
-    parser.add_argument('--test_iter', default=500, type=int,
-            help='num of iters in testing')
-    parser.add_argument('--val_step', default=2000, type=int,
-           help='val after training how many iters')
+    parser.add_argument('--val_step', default=2, type=int,
+            help='val after training how many epochs')
+#     parser.add_argument('--warmup_step', default=300, type=int,
+#             help='warm up steps before training')
     parser.add_argument('--max_length', default=50, type=int,
-           help='max length')
+            help='max length')
     parser.add_argument('--lr', default=2e-5, type=float,
-           help='learning rate')
-    parser.add_argument('--grad_iter', default=1, type=int,
-           help='accumulate gradient every x iterations')
+            help='learning rate')
     parser.add_argument('--load_ckpt', default=None,
-           help='load ckpt')
+            help='load ckpt')
     parser.add_argument('--save_ckpt', default=None,
-           help='save ckpt')
+            help='save ckpt')
     parser.add_argument('--fp16', action='store_true',
-           help='use nvidia apex fp16')
+            help='use nvidia apex fp16')
     parser.add_argument('--ckpt_name', type=str, default='',
-           help='checkpoint name.')
+            help='checkpoint name.')
     parser.add_argument('--random_seed', type=int, default=0,
-           help='random seed')
+            help='random seed')
     parser.add_argument('--only_test', action='store_true',
-           help='only test model with checkpoint')
+            help='only test model with checkpoint')
     parser.add_argument('--start_task', type=int, default=0,
-    help='continual task id of beginning task')
+            help='continual task id of beginning task')
+    # only for online
+    parser.add_argument('--val_iter', default=10, type=int,
+            help='val after learning how many batches, only for online')
     # only for bert / roberta
     parser.add_argument('--pretrain_ckpt', default='bert-base-uncased',
-           help='bert / roberta pre-trained checkpoint')
+            help='bert / roberta pre-trained checkpoint')
     parser.add_argument('--dot', action='store_true', 
-           help='use dot instead of L2 distance for proto')
+            help='use dot instead of L2 distance for proto')
     # only for CPR
     parser.add_argument('--temperature', type=float, default=0.1, 
-           help='temperature for supervised contrastive loss')
+            help='temperature for supervised contrastive loss')
     parser.add_argument('--cpl', action='store_true', 
-           help='whether use contrastive prototype loss')
+            help='whether use contrastive prototype loss')
     # experiment
     parser.add_argument('--use_sgd', action='store_true',
-           help='use SGD instead of AdamW for BERT.')
+            help='use SGD instead of AdamW for BERT.')
     
     args = parser.parse_args()
     return args
@@ -99,29 +93,6 @@ def set_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
-
-def get_model(args, word_encoder):
-    if args.model == 'ProtoNet':
-        model = ProtoNet(word_encoder, dot=args.dot)
-    elif args.model == 'Bert-Tagger':
-        model = BertTagger(word_encoder)
-    elif args.model == 'CPR':
-        model = CPR(word_encoder, temperature=args.temperature, cpl=args.cpl, dot=args.dot)
-    else:
-        raise NotImplementedError(f'Error: Model {args.model} not implemented!')
-    return model
-
-def get_dataset_path(dataset):
-    if dataset == 'few-nerd':
-        return 'data/few-nerd'
-    elif dataset == 'coarse-few-nerd':
-        return 'data/few-nerd/coarse'
-    elif dataset == 'fine-few-nerd':
-        return 'data/few-nerd/fine'
-    elif dataset == 'stackoverflow':
-        return 'data/stackoverflow'
-    else:
-        raise ValueError(f'Unknown dataset {dataset}!')
     
 
 def main():
@@ -129,205 +100,34 @@ def main():
     set_seed(args.random_seed)
     if not os.path.exists('log'):
         os.mkdir('log')
-    init_logging(f'log/{args.protocol}_{args.dataset}_{args.model}{"_cpl" if args.cpl else ""}{"_dot" if args.dot else ""}.log')   
+    init_logging(f'log/{args.setting}_{args.dataset}_{args.model}{"_cpl" if args.cpl else ""}{"_dot" if args.dot else ""}.log')   
     logger = logging.getLogger(__name__)
     logger.info(f'PID: {os.getpid()}; PPID: {os.getppid()}')
-    logger.info('loading model and tokenizer...')
-    pretrain_ckpt = args.pretrain_ckpt
-    word_encoder = BERTWordEncoder(pretrain_ckpt)
-    tokenizer = BertTokenizer.from_pretrained(pretrain_ckpt)
 
-    model = get_model(args, word_encoder)
-    if torch.cuda.is_available():
-        model.cuda()
-    dataset_path = get_dataset_path(args.dataset)
-
-    logger.info(f'EXP CONFIG: model: {args.model}, dataset: {args.dataset}, protocol: {args.protocol}, batch_size: {args.batch_size}, train_iter: {args.train_iter}, val_iter: {args.val_iter}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
+    logger.info(f'EXP CONFIG: model: {args.model}, dataset: {args.dataset}, setting: {args.setting}, batch_size: {args.batch_size}, train_epoch: {args.train_epoch}, val_step: {args.val_step}, learning_rate: {args.lr}, use_sgd: {args.use_sgd}')
     if not os.path.exists('checkpoint'):
         os.mkdir('checkpoint')
-    ckpt = f'checkpoint/{args.protocol}_{args.dataset}_{args.model}{"_cpl" if args.cpl else ""}{"_dot" if args.dot else ""}.pth.tar'
+    ckpt = f'checkpoint/{args.setting}_{args.dataset}_{args.model}{"_cpl" if args.cpl else ""}{"_dot" if args.dot else ""}.pth.tar'
     logger.info(f'model-save-path: {ckpt}')
 
-    if args.protocol == 'sup':
-        logger.info('loading data...')
-        
-        train_dataset = NERDataset(os.path.join(dataset_path, 'supervised/train.txt'), tokenizer, max_length=args.max_length)
-        valid_dataset = NERDataset(os.path.join(dataset_path, 'supervised/dev.txt'), tokenizer, max_length=args.max_length)
-        test_dataset = NERDataset(os.path.join(dataset_path, 'supervised/test.txt'), tokenizer, max_length=args.max_length)
-        
-        train_data_loader = get_loader(train_dataset, batch_size=args.batch_size)
-        val_data_loader = get_loader(valid_dataset, batch_size=args.batch_size)
-        test_data_loader = get_loader(test_dataset, batch_size=args.batch_size)
-        if args.model == 'Bert-Tagger':
-            lc = nn.Linear(in_features=word_encoder.output_dim, 
-                            out_features=len(train_dataset.get_label_set()))
-            if torch.cuda.is_available():
-                model.add_module('lc', lc.cuda())
-            else:
-                model.add_module('lc', lc)
-        sup_framework = SupNERFramework(train_data_loader, val_data_loader, test_data_loader)
-        if not args.only_test:
-            logger.info('start training')
-        
-            sup_framework.train(model, 
-                                args.model,
-                                load_ckpt=args.load_ckpt, 
-                                save_ckpt=ckpt,
-                                train_iter=args.train_iter,
-                                val_iter=args.val_iter,
-                                val_step=args.val_step,
-                                learning_rate=args.lr,
-                                grad_iter=args.grad_iter,
-                                fp16=args.fp16,
-                                use_sgd_for_bert=args.use_sgd)
-        # test
-        precision, recall, f1, fp, fn, within, outer = sup_framework.eval(model, eval_iter=args.test_iter, ckpt=ckpt)
-        logger.info('RESULT: precision: %.4f, recall: %.4f, f1: %.4f' % (precision, recall, f1))
-        logger.info('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f'%(fp, fn, within, outer))
+    if args.setting == 'sup':
+        setting = SupervisedSetting()
+        setting.execute(args, ckpt=ckpt)
     
-    elif args.protocol == 'CI':
-        logger.info('loading data...')
-        ci_tasks = PROTOCOLS[args.protocol + ' ' + args.dataset]
-        task_id = 0
-        label_offset = 0
-        test_loaders = {}
-                
-        result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in ci_tasks}
-        for task in ci_tasks:
-            train_dataset = ContinualNERDataset(os.path.join(dataset_path, ci_tasks[task], 'train.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
-            valid_dataset = ContinualNERDataset(os.path.join(dataset_path, ci_tasks[task], 'dev.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
-            test_dataset = ContinualNERDataset(os.path.join(dataset_path,  ci_tasks[task], 'test.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
-            label_offset += len(train_dataset.classes)
+    elif args.setting == 'CI':
+        setting = CiSetting()
+        setting.execute(args, ckpt=ckpt)
 
-            train_data_loader = get_loader(train_dataset, batch_size=args.batch_size)
-            val_data_loader = get_loader(valid_dataset, batch_size=args.batch_size)
-            test_data_loader = get_loader(test_dataset, batch_size=args.batch_size)
-            test_loaders[task] = test_data_loader
-            continual_framework = ContinualNERFramework(train_data_loader, val_data_loader, test_loaders)
+    elif args.setting == 'online':
+        setting = OnlineSetting()
+        setting.execute(args, ckpt=ckpt)
 
-            if not args.only_test and task_id >= args.start_task:
-                logger.info(f'start training [TASK] {task}')
-                load_ckpt = None
-                if task_id > 0:
-                    load_ckpt = ckpt
-                continual_framework.train(model, 
-                                args.model,
-                                load_ckpt=load_ckpt, 
-                                save_ckpt=ckpt,
-                                train_iter=args.train_iter,
-                                val_iter=args.val_iter,
-                                val_step=args.val_step,
-                                learning_rate=args.lr,
-                                grad_iter=args.grad_iter,
-                                fp16=args.fp16,
-                                use_sgd_for_bert=args.use_sgd)
-                # normal test
-                continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt=ckpt)
-            else:
-                # only test
-                continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt=ckpt)
-            task_id += 1
-            logger.info(f'[PROGRESS] ({task_id}/{len(ci_tasks)})')
-        logger.info('CI finished!')
-        output_dir = f'output/{args.protocol}_{args.dataset}_{args.model}'
-        if not os.path.exists(output_dir):
-            os.mkdir(output_dir)
-        with open(os.path.join(output_dir, 'precision'), 'a') as file:
-            file.write(str(datetime.datetime.now()) + '\n')
-            file.write(f'learning rate: {args.lr}; use cp loss: {args.contrast_proto}; use proj: {args.use_proj}; use dot: {args.dot};')
-            for task in result_dict:
-                task_precision = ','.join([str(_) for _ in result_dict[task]['precision']])
-                file.write(task_precision + '\n')
-        with open(os.path.join(output_dir, 'f1'), 'a') as file:
-            file.write(str(datetime.datetime.now()) + '\n')
-            file.write(f'learning rate: {args.lr}; use cp loss: {args.contrast_proto}; use proj: {args.use_proj}; use dot: {args.dot};')
-            for task in result_dict:
-                task_f1 = ','.join([str(_) for _ in result_dict[task]['f1']])
-                file.write(task_f1 + '\n')
-
-    elif args.protocol == 'online':
-        logger.info('loading data...')
-        online_tasks = PROTOCOLS[args.protocol + ' ' + args.dataset]
-        online_dataset = MultiNERDataset(tokenizer=tokenizer, max_length=args.max_length)
-        label_offset = 0
-        splits = {'train.txt', 'dev.txt', 'test.txt'}
-        for task in online_tasks:
-            for split in splits:
-                file_path = os.path.join(dataset_path,  online_tasks[task], split)
-                offset = online_dataset.append(file_path=file_path, label_offset=label_offset)
-                label_offset += offset
-        data_loader = get_loader(online_dataset, batch_size=args.batch_size)
-        online_framework = OnlineFramework(data_loader)
-        online_framework.learn(model=model, 
-                                model_name=args.model, 
-                                save_ckpt=ckpt, 
-                                learning_rate=args.lr,
-                                val_iter=args.val_iter,
-                                grad_iter=args.grad_iter,
-                                fp16=args.fp16,
-                                use_sgd_for_bert=args.use_sgd)
-        logger.info('online finished!')
-
-    elif args.protocol == 'multi-task':
-        logger.info('loading data...')
-        multi_task_pathes = PROTOCOLS[args.protocol + ' ' + args.dataset]
-                
-        label_offset = 0
-        train_dataset = MultiNERDataset(tokenizer, max_length=args.max_length)  
-        valid_dataset = MultiNERDataset(tokenizer, max_length=args.max_length)
-        test_dataset = MultiNERDataset(tokenizer, max_length=args.max_length)
-        task_id = 0
-        test_data_loaders = {}
-        result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in multi_task_pathes}
-        for task in multi_task_pathes:
-            type_set_size = train_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'train.txt'), label_offset)
-            train_data_loader = get_loader(train_dataset, batch_size=args.batch_size)
-            valid_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'dev.txt'), label_offset)
-            val_data_loader = get_loader(valid_dataset, batch_size=args.batch_size)
-            test_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'test.txt'), label_offset)
-            test_data_loader = get_loader(test_dataset, batch_size=args.batch_size)
-            test_data_loaders[task] = test_data_loader
-            continual_framework = ContinualNERFramework(train_data_loader, val_data_loader, test_data_loaders)
-            if not args.only_test:
-                logger.info(f'start training [TASK] {task}')
-                load_ckpt = None
-                if task_id > 0:
-                    load_ckpt = ckpt
-                continual_framework.train(model, 
-                                args.model,
-                                load_ckpt=load_ckpt, 
-                                save_ckpt=ckpt,
-                                train_iter=args.train_iter,
-                                val_iter=args.val_iter,
-                                val_step=args.val_step,
-                                learning_rate=args.lr,
-                                grad_iter=args.grad_iter,
-                                fp16=args.fp16,
-                                use_sgd_for_bert=args.use_sgd)
-                # test
-                continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt='none')
-            else:
-                # test
-                continual_framework.eval(model, result_dict, eval_iter=args.test_iter, ckpt=ckpt)
-            label_offset += type_set_size
-            task_id += 1
-            logger.info(f'[PROGRESS] ({task_id}/{len(multi_task_pathes)})')
-        logger.info('Multi-task finished!')
-        output_dir = f'output/{args.protocol}_{args.dataset}_{args.model}'
-        if not os.path.exists(output_dir):
-            os.mkdir(output_dir)
-        with open(os.path.join(output_dir, 'precision'), 'a') as file:
-            file.write(str(datetime.datetime.now()) + '\n')
-            file.write(f'learning rate: {args.lr}; use cp loss: {args.contrast_proto}; use proj: {args.use_proj}; use dot: {args.dot};')
-            for task in result_dict:
-                task_precision = ','.join([str(_) for _ in result_dict[task]['precision']])
-                file.write(task_precision + '\n')
-        with open(os.path.join(output_dir, 'f1'), 'a') as file:
-            file.write(str(datetime.datetime.now()) + '\n')
-            file.write(f'learning rate: {args.lr}; use cp loss: {args.contrast_proto}; use proj: {args.use_proj}; use dot: {args.dot};')
-            for task in result_dict:
-                task_f1 = ','.join([str(_) for _ in result_dict[task]['f1']])
-                file.write(task_f1 + '\n')
+    elif args.setting == 'multi-task':
+        setting = MultiTaskSetting()
+        setting.execute(args, ckpt=ckpt)
+    
+    else:
+        raise NotImplementedError(f'{args.setting} has not been implemented!')
         
 
 if __name__ == '__main__':

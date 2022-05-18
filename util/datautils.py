@@ -82,7 +82,7 @@ class Sample(SampleBase):
         newlines = zip(self.words, self.tags)
         return '\n'.join(['\t'.join(line) for line in newlines])
 
-class NERDataset(Dataset):
+class NerDataset(Dataset):
     """
     NER Dataset
     """
@@ -228,7 +228,7 @@ class NERDataset(Dataset):
     def get_label_set(self):
         return set(self.label2tag.keys())
 
-class ContinualNERDataset(NERDataset):
+class ContinualNerDataset(NerDataset):
     """
     Continual NER Dataset
     """
@@ -245,7 +245,7 @@ class ContinualNERDataset(NERDataset):
         self.max_length = max_length
         self.ignore_label_id = ignore_label_id
     
-class MultiNERDataset(NERDataset):
+class MultiNerDataset(NerDataset):
     """
     Multi NER Dataset
     """
@@ -291,22 +291,25 @@ def collate_fn(data):
     return batch
 
 def get_loader(dataset, batch_size):
-    data_loader = DataLoader(
-        dataset=dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        pin_memory=True,
-        num_workers=2,
-        collate_fn=collate_fn
-    )
-    return data_loader
+    if dataset:
+        data_loader = DataLoader(
+            dataset=dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=4,
+            collate_fn=collate_fn
+        )
+        return data_loader
+    else:
+        return None
 
 if __name__ == '__main__':
-    file_path='../data/few-nerd/continual/coarse/disjoint/art/train.txt'
+    file_path='../data/few-nerd/coarse/disjoint/art/train.txt'
     tokenizer=BertTokenizer.from_pretrained('bert-base-uncased')
     max_length=100
     label_offset=10
-    dataset = ContinualNERDataset(file_path, tokenizer, max_length, label_offset=label_offset)
+    dataset = ContinualNerDataset(file_path, tokenizer, max_length, label_offset=label_offset)
     train_loader = get_loader(dataset, batch_size=10)
     for i, batch in enumerate(train_loader):
         with open('batch_example_new.log', 'w') as f:

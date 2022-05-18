@@ -2,7 +2,7 @@ export CUDA_VISIBLE_DEVICES=0
 
 python main.py \
         --dataset coarse-few-nerd \
-        --protocol CI \
+        --setting CI \
         --model CPR \
         --use_sgd \
         --lr 5e-2 \
@@ -11,13 +11,13 @@ python main.py \
 #         --only_test
 # python main.py \
 #         --dataset fine-few-nerd \
-#         --protocol CI \ 
+#         --setting CI \ 
 #         --model ProtoNet \
 #         --dot \
 #         --use_sgd
 # python main.py \
 #         --dataset stackoverflow \
-#         --protocol CI \ 
+#         --setting CI \ 
 #         --model ProtoNet \
 #         --dot \
 #         --use_sgd
