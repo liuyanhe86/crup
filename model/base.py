@@ -117,16 +117,15 @@ class NERModel(nn.Module):
             cnt += len(label_class_span[label])
         return cnt
 
-    def __transform_label_to_tag__(self, pred, sample):
+    def __transform_label_to_tag__(self, pred, true_label, label2tag):
         '''
         flatten labels and transform them to string tags
         '''
-        true_label = torch.cat(sample['label'], 0)
         # drop ignore index
         true_label = true_label[true_label!=self.ignore_index]
         true_label = true_label.cpu().numpy().tolist()
-        pred_tag = [sample['label2tag'][label] for label in pred]
-        label_tag = [sample['label2tag'][label] for label in true_label]
+        pred_tag = [label2tag[label] for label in pred]
+        label_tag = [label2tag[label] for label in true_label]
         
         assert len(pred_tag) == len(label_tag)
         assert len(pred_tag) == len(pred)
@@ -172,11 +171,11 @@ class NERModel(nn.Module):
             cnt += len(list(set(label_span[label]).intersection(set(outer_pred_span))))
         return cnt
 
-    def __get_type_error__(self, pred, sample):
+    def __get_type_error__(self, pred, true_label, label2tag):
         '''
         return finegrained type error cnt, coarse type error cnt and total correct span count
         '''
-        pred_tag, label_tag = self.__transform_label_to_tag__(pred, sample)
+        pred_tag, label_tag = self.__transform_label_to_tag__(pred, true_label, label2tag)
         pred_span = self.__get_class_span_dict__(pred_tag, is_string=True)
         label_span = self.__get_class_span_dict__(label_tag, is_string=True)
         total_correct_span = self.__get_correct_span__(pred_span, label_span) + 1e-6
@@ -200,18 +199,19 @@ class NERModel(nn.Module):
         correct_cnt = self.__get_intersect_by_entity__(pred_class_span, label_class_span)
         return pred_cnt, label_cnt, correct_cnt
 
-    def error_analysis(self, pred: Tensor, label: Tensor, sample):
+    def error_analysis(self, pred: Tensor, label: Tensor, label2tag):
         '''
         return 
         token level false positive rate and false negative rate
         entity level within error and outer error 
         '''
         pred = pred.view(-1)
+        true_label = label
         label = label.view(-1)
         pred, label = self.__delete_ignore_index(pred, label)
         fp = torch.sum(((pred > 0) & (label == 0)).type(torch.FloatTensor))
         fn = torch.sum(((pred == 0) & (label > 0)).type(torch.FloatTensor))
         pred = pred.cpu().numpy().tolist()
         label = label.cpu().numpy().tolist()
-        within, outer, total_span = self.__get_type_error__(pred, sample)
+        within, outer, total_span = self.__get_type_error__(pred, true_label, label2tag)
         return fp, fn, len(pred), within, outer, total_span

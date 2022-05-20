@@ -22,7 +22,7 @@ def get_args():
     parser.add_argument('--train_epoch', default=10, type=int,
             help='num of iters in training')
     parser.add_argument('--val_step', default=2, type=int,
-            help='val after training how many epochs')
+            help='val after training how many iters')
 #     parser.add_argument('--warmup_step', default=300, type=int,
 #             help='warm up steps before training')
     parser.add_argument('--max_length', default=50, type=int,
@@ -43,9 +43,6 @@ def get_args():
             help='only test model with checkpoint')
     parser.add_argument('--start_task', type=int, default=0,
             help='continual task id of beginning task')
-    # only for online
-    parser.add_argument('--val_iter', default=10, type=int,
-            help='val after learning how many batches, only for online')
     # only for bert / roberta
     parser.add_argument('--pretrain_ckpt', default='bert-base-uncased',
             help='bert / roberta pre-trained checkpoint')

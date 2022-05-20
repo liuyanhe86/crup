@@ -44,11 +44,11 @@ class CPR(NERModel):
     def _batch_dist(self, protos, embeddings):
         return self.__dist__(protos.unsqueeze(0), embeddings.unsqueeze(1), 2)
 
-    def _update_protos(self, embedding, sample):
-        tag = sample['label']
+    def _update_protos(self, embedding, batch):
+        tag = batch['label']
         tag = torch.cat(tag, 0)
-        tag_set = set([int(_) for _ in tag.tolist()]) - {self.ignore_index}
-        local_proto = []
+        tag_set = set([int(_) for _ in tag.tolist()])
+        tag_set.discard(self.ignore_index)
         index2tag = {}
         index = 0
         assert tag.size(0) == embedding.size(0)
@@ -56,24 +56,31 @@ class CPR(NERModel):
             mean = torch.mean(embedding[tag==label], dim=0)
             if label not in self.global_protos:
                 self.global_protos[label] = mean
-                # local_proto.append(mean)
             else:
+                # !!! novel
                 new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
                 self.global_protos[label] = new_proto
-            local_proto.append(mean)
             index2tag[index] = label
             index += 1
-        local_proto = torch.stack(local_proto, 0)
-        if self.protocol == 'CI':
-            return index2tag, local_proto
-        else:
-            return index2tag, self.global_protos
+    
+    def _get_all_protos(self):
+        index2label, protos = {}, []
+        index = 0
+        for label in self.global_protos:
+            protos.append(self.global_protos[label])
+            index2label[index] = label
+            index += 1
+        protos = torch.stack(protos)
+        return index2label, protos
 
-    def forward(self, sample):
-        embedding = self.word_encoder(sample['sentence'], sample['attention_mask'])
+
+    def forward(self, batch):
+        embedding = self.word_encoder(batch['sentence'], batch['attention_mask'])
         embedding = self.drop(embedding)  # [batch_size, max_len, 768]
-        embedding = embedding[sample['text_mask']==1].view(-1, embedding.size(-1))
-        index2tag, proto = self._update_protos(embedding, sample)
+        embedding = embedding[batch['text_mask']==1].view(-1, embedding.size(-1))
+        if 'label' in batch:
+            self._update_protos(embedding, batch)
+        index2tag, proto = self._get_all_protos()
         logits = self._batch_dist(proto, embedding)  # [num_of_tokens, class_num]
         _, pred = torch.max(logits, 1)
         for index in index2tag:
@@ -97,11 +104,11 @@ class CPR(NERModel):
             torch.exp(dot_product_tempered - torch.max(dot_product_tempered, dim=1, keepdim=True)[0].detach()) + 1e-5
         )
         mask_combined = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels) # n*m        
-        cardinality_per_samples = torch.sum(mask_combined, dim=1)
+        cardinality_per_batchs = torch.sum(mask_combined, dim=1)
 
         log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered, dim=1, keepdim=True)))
-        supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_samples
-        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
+        supervised_contrastive_loss_per_batch = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
+        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_batch)
 
         return supervised_contrastive_loss
     
@@ -113,6 +120,7 @@ class CPR(NERModel):
         protos = torch.stack(protos)
         proto_labels = torch.Tensor(proto_labels)
         if torch.cuda.is_available():
+            protos.cuda()
             proto_labels.cuda()
         z_i, z_j = embedding.view(-1, embedding.size(-1)), protos.view(-1, embedding.size(-1))
         dot_product_tempered = torch.mm(z_i, z_j.T) / self.temperature  # z_i dot z_j / tau
@@ -121,11 +129,11 @@ class CPR(NERModel):
             torch.exp(dot_product_tempered - torch.max(dot_product_tempered, dim=1, keepdim=True)[0].detach()) + 1e-5
         )
         mask_combined = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == proto_labels) # n*m        
-        cardinality_per_samples = torch.sum(mask_combined, dim=1)
+        cardinality_per_batchs = torch.sum(mask_combined, dim=1)
 
         log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered, dim=1, keepdim=True)))
-        proto_contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_samples
-        proto_contrastive_loss = torch.mean(proto_contrastive_loss_per_sample)
+        proto_contrastive_loss_per_batch = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
+        proto_contrastive_loss = torch.mean(proto_contrastive_loss_per_batch)
 
         return proto_contrastive_loss
     
