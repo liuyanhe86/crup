@@ -4,10 +4,10 @@ import os
 import torch
 from torch import nn
 from tqdm import tqdm
-from transformers import AdamW
+from torch.optim import AdamW, SGD
 
 from .datautils import get_loader, NerDataset
-from model import BERTWordEncoder, BertTagger, CPR, ProtoNet
+from model import BERTWordEncoder, BertTagger, PCP, ProtoNet
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,8 @@ def get_model(args):
         model = ProtoNet(word_encoder, dot=args.dot)
     elif args.model == 'Bert-Tagger':
         model = BertTagger(word_encoder)
-    elif args.model == 'CPR':
-        model = CPR(word_encoder, temperature=args.temperature, cpl=args.cpl, dot=args.dot)
+    elif args.model == 'PCP':
+        model = PCP(word_encoder, temperature=args.temperature, cpl=args.cpl, dot=args.dot)
     else:
         raise NotImplementedError(f'Error: Model {args.model} not implemented!')
     if torch.cuda.is_available():
@@ -31,11 +31,11 @@ class SupNerEpisode:
         self.args = args
         self.model, self.word_encoder = get_model(args)
         self.train_dataset = train_dataset
-        self.train_data_loader = get_loader(train_dataset, batch_size=args.batch_size)
+        self.train_data_loader = get_loader(train_dataset, batch_size=args.batch_size, num_workers=8)
         self.val_dataset = val_dataset
-        self.val_data_loader = get_loader(val_dataset, batch_size=args.batch_size)
+        self.val_data_loader = get_loader(val_dataset, batch_size=args.batch_size, num_workers=0)
         self.test_dataset = test_dataset
-        self.test_data_loader = get_loader(test_dataset, batch_size=args.batch_size)
+        self.test_data_loader = get_loader(test_dataset, batch_size=args.batch_size, num_workers=4)
 
     def initialize_model(self):
         if self.args.model == 'Bert-Tagger':
@@ -75,7 +75,7 @@ class SupNerEpisode:
 
         if self.args.use_sgd:
             logger.info('Optimizer: SGD')
-            optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
+            optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
         else:
             logger.info('Optimizer: AdamW')
             optimizer = AdamW(parameters_to_optimize, lr=self.args.lr, correct_bias=False)
@@ -98,15 +98,16 @@ class SupNerEpisode:
 
         # Training
         best_f1 = 0.0
-        iter_loss = 0.0
-        iter_sample = 0
+        epoch_loss = 0.0
+        epoch_sample = 0
         pred_cnt = 0
         label_cnt = 0
         correct_cnt = 0
 
-        iter = 0
+        epoch = 0
         best_count = 0
-        while iter + 1 < self.args.train_epoch and best_count < 3:
+        while epoch + 1 < self.args.train_epoch and best_count < 3:
+            it = 0
             for _, batch in tqdm(enumerate(self.train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
                 label = torch.cat(batch['label'], 0)
                 if torch.cuda.is_available():
@@ -127,18 +128,25 @@ class SupNerEpisode:
                     loss.backward()
                 optimizer.step()
 
-                iter_loss += self.item(loss.data)
+                epoch_loss += self.item(loss.data)
                 pred_cnt += tmp_pred_cnt
                 label_cnt += tmp_label_cnt
                 correct_cnt += correct
-                iter_sample += 1
+                epoch_sample += 1
+                if (it + 1) % 100 == 0:
+                    precision = correct_cnt / pred_cnt
+                    recall = correct_cnt / label_cnt
+                    f1 = 2 * precision * recall / (precision + recall)
+                    logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
+                .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
+                it += 1
             precision = correct_cnt / pred_cnt
             recall = correct_cnt / label_cnt
             f1 = 2 * precision * recall / (precision + recall)
-            logger.info('iter: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
-                .format(iter + 1, iter_loss/ iter_sample, precision, recall, f1) + '\r')
+            logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
+                .format(epoch + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
 
-            if (iter + 1) % self.args.val_step == 0:
+            if (epoch + 1) % self.args.val_step == 0:
                 _, _, f1, _, _, _, _ = self.eval()
                 self.model.train()
                 if f1 > best_f1:
@@ -147,13 +155,13 @@ class SupNerEpisode:
                     best_f1 = f1
                     best_count = 0
                 best_count += 1
-                iter_loss = 0.
-                iter_sample = 0.
-                pred_cnt = 0
-                label_cnt = 0
-                correct_cnt = 0    
-            iter += 1
-        if iter + 1 < self.args.train_epoch:
+            epoch_loss = 0.
+            epoch_sample = 0.
+            pred_cnt = 0
+            label_cnt = 0
+            correct_cnt = 0    
+            epoch += 1
+        if epoch + 1 < self.args.train_epoch:
             logger.info('Early stop')
         logger.info(f'Finish training {self.args.model} on {self.args.dataset} in {self.args.setting} setting.')
 
@@ -162,11 +170,12 @@ class SupNerEpisode:
         logger.info('Start evaluating...')
         
         self.model.eval()
-        total_eval_iter = 0
+        total_eval_epoch = 0
+        is_test = False
         if ckpt is None:
             logger.info("Use val dataset")
             eval_data_loader = self.val_data_loader
-            total_eval_iter = len(self.val_dataset) // self.args.batch_size
+            total_eval_epoch = len(self.val_dataset) // self.args.batch_size
         else:
             logger.info("Use test dataset")
             if ckpt != 'none':
@@ -177,7 +186,8 @@ class SupNerEpisode:
                         continue
                     own_state[name].copy_(param)
             eval_data_loader = self.test_data_loader
-            total_eval_iter = len(self.test_dataset) // self.args.batch_size
+            total_eval_epoch = len(self.test_dataset) // self.args.batch_size
+            is_test = True
 
         pred_cnt = 0 # pred entity cnt
         label_cnt = 0 # true label entity cnt
@@ -191,7 +201,7 @@ class SupNerEpisode:
         total_span_cnt = 0 # span correct
 
         with torch.no_grad():
-            for _, batch in tqdm(enumerate(eval_data_loader), desc='eval progress', total=total_eval_iter):
+            for _, batch in tqdm(enumerate(eval_data_loader), desc='eval progress', total=total_eval_epoch):
                 label = torch.cat(batch['label'], 0)
                 if torch.cuda.is_available():
                     for k in batch:
@@ -213,31 +223,64 @@ class SupNerEpisode:
                 outer_cnt += outer
                 within_cnt += within
                 total_span_cnt += total_span
-
-        precision = correct_cnt / pred_cnt
-        recall = correct_cnt /label_cnt
-        f1 = 2 * precision * recall / (precision + recall)
-        fp_error = fp_cnt / total_token_cnt
-        fn_error = fn_cnt / total_token_cnt
-        within_error = within_cnt / total_span_cnt
-        outer_error = outer_cnt / total_span_cnt
-        logger.info('[TEST] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
+        # precision = correct_cnt / pred_cnt
+        # recall = correct_cnt /label_cnt
+        # f1 = 2 * precision * recall / (precision + recall)
+        # fp_error = fp_cnt / total_token_cnt
+        # fn_error = fn_cnt / total_token_cnt
+        # within_error = within_cnt / total_span_cnt
+        # outer_error = outer_cnt / total_span_cnt
+    
+        if pred_cnt == 0:
+            precision = 0
+            logger.warning('pred_cnt is 0!')
+        else:
+            precision = correct_cnt / pred_cnt
+        
+        if label_cnt == 0:
+            recall = 0
+            logger.warning('label_cnt is 0!')
+        else:
+            recall = correct_cnt /label_cnt
+        if precision + recall != 0:
+            f1 = 2 * precision * recall / (precision + recall)
+        else:
+            f1 = 0.0
+            logger.warning('P and R is 0! f1 compute failed!')
+        if total_token_cnt == 0:
+            fp_error = 0
+            fn_error = 0
+            logger.warning('total_token_cnt is 0!')
+        else:
+            fp_error = fp_cnt / total_token_cnt
+            fn_error = fn_cnt / total_token_cnt
+        if total_span_cnt == 0:
+            within_error = 0
+            outer_error = 0
+            logger.warning('total_span_cnt is 0!')
+        else:
+            within_error = within_cnt / total_span_cnt
+            outer_error = outer_cnt / total_span_cnt
+        if is_test:
+            logger.info('[TEST] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
+        else:
+            logger.info('[VAL] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
         return precision, recall, f1, fp_error, fn_error, within_error, outer_error    
 
 class ContinualNerEpisode(SupNerEpisode):
-    def __init__(self, args):
+    def __init__(self, args, result_dict):
         SupNerEpisode.__init__(self, args)
         self.test_data_loaders = {}
         self.test_datasets = {}
-        self.result_dict = {}
+        self.result_dict = result_dict
     
     def append_task(self, task, train_dataset: NerDataset, val_dataset: NerDataset, test_dataset: NerDataset):
         self.train_dataset = train_dataset
-        self.train_data_loader = get_loader(train_dataset, batch_size=self.args.batch_size)
+        self.train_data_loader = get_loader(train_dataset, batch_size=self.args.batch_size, num_workers=8)
         self.val_dataset = val_dataset
-        self.val_data_loader = get_loader(val_dataset, batch_size=self.args.batch_size)
+        self.val_data_loader = get_loader(val_dataset, batch_size=self.args.batch_size, num_workers=0)
         self.test_datasets[task] = test_dataset
-        self.test_data_loaders[task] = get_loader(test_dataset, batch_size=self.args.batch_size)
+        self.test_data_loaders[task] = get_loader(test_dataset, batch_size=self.args.batch_size, num_workers=4)
 
     def eval(self, ckpt=None): 
         logger.info('Start evaluating...')
@@ -255,7 +298,6 @@ class ContinualNerEpisode(SupNerEpisode):
             within_cnt = 0 # span correct but of wrong fine-grained type 
             outer_cnt = 0 # span correct but of wrong coarse-grained type
             total_span_cnt = 0 # span correct
-
             for _, batch in tqdm(enumerate(dataloader), desc='eval progress', total=total):
                 label = torch.cat(batch['label'], 0)
                 if torch.cuda.is_available():
@@ -316,7 +358,7 @@ class ContinualNerEpisode(SupNerEpisode):
             logger.info("Use val dataset")
             with torch.no_grad():
                 precision, recall, f1, fp, fn, within, outer = eval_one_loader(self.val_data_loader, total=len(self.val_dataset) // self.args.batch_size)
-                logger.info('[VAL] [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
+                logger.info('[VAL] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
                 return precision, recall, f1, fp, fn, within, outer
         else:
             logger.info("Use test dataset")
@@ -343,7 +385,7 @@ class OnlineNerEpisode(SupNerEpisode):
     def __init__(self, args, dataset=None):
         SupNerEpisode.__init__(self, args)
         self.dataset = dataset
-        self.data_loader = get_loader(dataset=dataset, batch_size=args.batch_size)
+        self.data_loader = get_loader(dataset=dataset, batch_size=args.batch_size, num_workers=8)
         
     def learn(self, save_ckpt):
         logger.info("Start online learning...")
@@ -363,8 +405,8 @@ class OnlineNerEpisode(SupNerEpisode):
 
         model.train()
         # Training
-        iter_loss = 0.0
-        iter_sample = 0
+        epoch_loss = 0.0
+        epoch_sample = 0
         pred_cnt = 0
         label_cnt = 0
         correct_cnt = 0
@@ -388,20 +430,20 @@ class OnlineNerEpisode(SupNerEpisode):
                 loss.backward()
             optimizer.step()
 
-            iter_loss += self.item(loss.data)
+            epoch_loss += self.item(loss.data)
             pred_cnt += tmp_pred_cnt
             label_cnt += tmp_label_cnt
             correct_cnt += correct
-            iter_sample += 1
+            epoch_sample += 1
             
             precision = correct_cnt / pred_cnt
             recall = correct_cnt / label_cnt
             f1 = 2 * precision * recall / (precision + recall)
             if (it + 1) % self.args.val_step == 0:
-                logger.info('iter: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
-                    .format(it + 1, iter_loss/ iter_sample, precision, recall, f1) + '\r')
-                iter_loss = 0.
-                iter_sample = 0.
+                logger.info('epoch: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
+                    .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
+                epoch_loss = 0.
+                epoch_sample = 0.
                 pred_cnt = 0
                 label_cnt = 0
                 correct_cnt = 0

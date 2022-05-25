@@ -66,4 +66,8 @@ class AddNER(NERModel):
                         final_pred.append(candidates[0])
                     else:
                         final_pred.append(0)
+        final_pred = torch.Tensor(final_pred)
+        if torch.cuda.is_available():
+            final_pred.cuda()
+        return final_pred
 

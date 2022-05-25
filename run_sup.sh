@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 # python main.py \
 #         --dataset few-nerd \
@@ -8,19 +8,21 @@ export CUDA_VISIBLE_DEVICES=0
 #         --use_sgd \
 #         --lr 5e-3
 
-python main.py \
-        --dataset few-nerd \
-        --setting sup \
-        --model ProtoNet \
-        --batch_size 32 \
-        --use_sgd \
-        --lr 2e-5 \
-        --dot
-
 # python main.py \
 #         --dataset few-nerd \
 #         --setting sup \
-#         --model CPR \
+#         --model ProtoNet \
 #         --batch_size 32 \
 #         --use_sgd \
-#         --lr 1e-3 \
+#         --lr 2e-5 \
+#         --dot
+
+python main.py \
+        --dataset few-nerd \
+        --setting sup \
+        --model PCP \
+        --batch_size 32 \
+        --augment \
+        --lr 2e-5 \
+        --temperature 0.1
+        # --dot

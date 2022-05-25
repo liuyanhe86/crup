@@ -1,5 +1,6 @@
 import logging
 import torch
+torch.set_printoptions(profile='full')
 from torch import nn
 import torch.nn.functional as F
 
@@ -7,26 +8,27 @@ from model import NERModel
 
 logger = logging.getLogger(__name__)
 
-class CPR(NERModel):
+class PCP(NERModel):
     
     def __init__(self, 
                 word_encoder, 
-                protocol='CI', 
+                setting='CI', 
                 temperature=0.5,
                 dot=False,
-                cpl=False, 
-                embedding_dim=64):
+                cpl=False):
         NERModel.__init__(self, word_encoder)
         self.drop = nn.Dropout()
         self.proj_head = nn.Sequential(
             nn.Linear(in_features=word_encoder.output_dim, out_features=word_encoder.output_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(in_features=word_encoder.output_dim, out_features=embedding_dim)
+            nn.Linear(in_features=word_encoder.output_dim, 
+                      out_features=word_encoder.output_dim)
+                    # out_features=10)
         )
+        # self.proto_head = nn.Linear(in_features=2*word_encoder.output_dim, out_features=word_encoder.output_dim)
         self.global_protos = {}
-        self.protocol = protocol
+        self.setting = setting
         self.temperature = temperature
-        self.embedding_dim = embedding_dim
         self.dot = dot
         self.cpl = cpl
     
@@ -54,12 +56,14 @@ class CPR(NERModel):
         assert tag.size(0) == embedding.size(0)
         for label in tag_set:
             mean = torch.mean(embedding[tag==label], dim=0)
-            if label not in self.global_protos:
-                self.global_protos[label] = mean
-            else:
-                # !!! novel
-                new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
-                self.global_protos[label] = new_proto
+            # if label not in self.global_protos:
+            #     self.global_protos[label] = mean
+            # else:
+            #     # !!! novel
+            #     # new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
+            #     new_proto = self.proto_head(torch.cat([mean, self.global_protos[label]]))
+            #     self.global_protos[label] = new_proto
+            self.global_protos[label] = mean
             index2tag[index] = label
             index += 1
     
@@ -85,9 +89,8 @@ class CPR(NERModel):
         _, pred = torch.max(logits, 1)
         for index in index2tag:
             pred[pred == index] = index2tag[index]
-        embedding = self.proj_head(embedding)  # [batch_size, max_len, 64]
+        embedding = self.proj_head(embedding)  # [batch_size, max_len, contrastive_embed_dim]
         embedding = F.normalize(embedding, p=2, dim=1)
-        # logger.info(f'embedding.shape: {embedding.shape}; logits.shape: {logits.shape}; pred.shape: {pred.shape}')
         return embedding, pred
     
     def loss(self, embedding, labels):
@@ -96,20 +99,25 @@ class CPR(NERModel):
         else:
             return self._sup_contrastive_loss(embedding, labels)
     
-    def _sup_contrastive_loss(self, embedding, labels):
-        z_i, z_j = embedding.view(-1, embedding.size(-1)), embedding.view(-1, embedding.size(-1))
-        dot_product_tempered = torch.mm(z_i, z_j.T) / self.temperature  # z_i dot z_j / tau
+    def _sup_contrastive_loss(self, embedding:torch.Tensor, labels:torch.Tensor):
+        z_i, z_j = embedding, embedding.T
+        dot_product_tempered = torch.mm(z_i, z_j) / self.temperature  # z_i dot z_j / tau
         # Minus max for numerical stability with exponential. Same done in cross entropy. Epsilon added to avoid log(0)
         exp_dot_tempered = (
-            torch.exp(dot_product_tempered - torch.max(dot_product_tempered, dim=1, keepdim=True)[0].detach()) + 1e-5
+            torch.exp(dot_product_tempered - torch.max(dot_product_tempered, dim=1, keepdim=True)[0]) + 1e-5
         )
-        mask_combined = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels) # n*m        
+        mask_similar_class = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels)
+        if torch.cuda.is_available():
+            mask_similar_class.cuda()
+        if torch.cuda.is_available():
+            mask_anchor_out = (1 - torch.eye(exp_dot_tempered.shape[0]).cuda())
+        else:
+            mask_anchor_out = (1 - torch.eye(exp_dot_tempered.shape[0]))
+        mask_combined = mask_similar_class * mask_anchor_out
         cardinality_per_batchs = torch.sum(mask_combined, dim=1)
-
         log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered, dim=1, keepdim=True)))
-        supervised_contrastive_loss_per_batch = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
-        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_batch)
-
+        supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_anchor_out, dim=1) / cardinality_per_batchs
+        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
         return supervised_contrastive_loss
     
     def _proto_contrastive_loss(self, embedding, labels):

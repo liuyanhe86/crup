@@ -1,6 +1,7 @@
 import logging
 import numpy as np
 import os
+import random
 from typing import Dict, List, Tuple
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -32,10 +33,16 @@ class SampleBase:
         return set(self.get_class_count().keys()).issubset(set(target_classes))
 
 class Sample(SampleBase):
-    def __init__(self, filelines: List[str]):
-        filelines = [line.split('\t') for line in filelines]
-        self.words, self.tags = zip(*filelines)
-        self.words = [word.lower() for word in self.words]
+    def __init__(self, filelines:List[str]=None):
+        if filelines:
+            filelines = [line.split('\t') for line in filelines]
+            self.words, self.tags = zip(*filelines)
+            self.words = [word.lower() for word in self.words]
+            self.tags = list(self.tags)
+            self.class_count = {}
+    
+    def set_sample(self, words, tags):
+        self.words, self.tags = words, tags
         self.class_count = {}
 
     def __count_entities__(self) -> None:
@@ -77,20 +84,52 @@ class Sample(SampleBase):
         if 'O' in tag_class:
             tag_class.remove('O')
         return tag_class
+    
+    def augment(self):
+        '''
+        Get augmented view of sample.
+        '''
+        spans = []
+        i = 0
+        while i < len(self.tags):
+            tag = self.tags[i]
+            span = []
+            j = i
+            while j < len(self.tags):
+                if self.tags[j] == tag:
+                    span.append(j)
+                    j += 1
+                    i += 1
+                else:
+                    break
+            spans.append(span)   
+        augmented_words, augmented_tags = [], []
+        random.shuffle(spans)
+        while len(augmented_words) < len(self.words):
+            span = spans.pop(0)
+            augmented_words.extend([self.words[_] for _ in span])
+            augmented_tags.extend([self.tags[_] for _ in span])
 
+        assert len(self.words) == len(augmented_words)
+        assert len(self.tags) == len(augmented_tags)
+        augment_view = Sample()
+        augment_view.set_sample(augmented_words, augmented_tags)
+        return augment_view
+                
     def __str__(self):
         newlines = zip(self.words, self.tags)
-        return '\n'.join(['\t'.join(line) for line in newlines])
+        return ' '.join([f'{line[0]}[{line[1]}]' for line in newlines])
 
 class NerDataset(Dataset):
     """
     NER Dataset
     """
-    def __init__(self, file_path:str, tokenizer, max_length: int, ignore_label_id: int=-1):
+    def __init__(self, file_path:str, tokenizer, augment=False, max_length:int=10, ignore_label_id:int=-1):
         if not os.path.exists(file_path):
             logger.error(f"data file {file_path} does not exist!")
             assert(0)
         self.tokenizer = tokenizer
+        self.augment = augment
         self.samples, self.classes = self.__load_data_from_file__(file_path)
         # add 'O' and make sure 'O' is labeled 0
         distinct_tags = ['O'] + list(self.classes)
@@ -134,9 +173,10 @@ class NerDataset(Dataset):
         tokens = []
         labels = []
         for word, tag in zip(sample.words, sample.tags):
-            word_tokens = self.tokenizer.tokenize(word)  # just tokenize one single word
+            word_tokens = self.tokenizer.tokenize(word)
             if word_tokens:
                 tokens.extend(word_tokens)
+                # One word may be tokenized to multiple tokens
                 # Use the real label id for the first token of the word, and padding ids for the remaining tokens
                 word_labels = [self.tag2label[tag]] + [self.ignore_label_id] * (len(word_tokens) - 1)
                 labels.extend(word_labels)
@@ -186,37 +226,36 @@ class NerDataset(Dataset):
             text_mask_list.append(text_mask)
 
             assert len(labels_list[i]) == len(tokens) - 2, print(labels_list[i], tokens)
-        return indexed_tokens_list, attention_mask_list, text_mask_list, labels_list
-
-    def __additem__(self, index, dataset, word, attention_mask, text_mask, label) -> None:
-        dataset['index'].append(index)
-        dataset['sentence'] += word
-        dataset['attention_mask'] += attention_mask
-        dataset['text_mask'] += text_mask
-        dataset['label'] += label
+        return indexed_tokens_list, attention_mask_list, text_mask_list, labels_list        
 
     def __populate__(self, idx: int) -> Dict[str, List]:
         '''
         populate sample into data dict
-        set `savelabeldic=True` if you want to save label2tag dict
         '''
 
         '''
-        index: sample index in all samples
         word: tokenized word ids
         attention mask: attention mask in BERT
         text_mask: 0 for special tokens and paddings, 1 for real text
         label: NER labels, List[int]
         '''
-        sample = {'index':[], 'sentence': [], 'attention_mask': [], 'text_mask':[], 'label':[]}
-        tokens, labels = self.__get_token_label_list__(self.samples[idx])
-        word, attention_mask, text_mask, label = self.__getraw__(tokens, labels)
-        word = torch.tensor(word).long()
-        attention_mask = torch.tensor(np.array(attention_mask)).long()
-        text_mask = torch.tensor(np.array(text_mask)).long()
-        self.__additem__(idx, sample, word, attention_mask, text_mask, label)
-        sample['label2tag'] = self.label2tag
-        return sample
+        data_item = {'sentence': [], 'attention_mask': [], 'text_mask':[], 'label':[]}
+        def add_item(sample):
+            tokens, labels = self.__get_token_label_list__(sample)
+            word, attention_mask, text_mask, label = self.__getraw__(tokens, labels)
+            word = torch.tensor(word).long()
+            attention_mask = torch.tensor(np.array(attention_mask)).long()
+            text_mask = torch.tensor(np.array(text_mask)).long()
+            data_item['sentence'] += word
+            data_item['attention_mask'] += attention_mask
+            data_item['text_mask'] += text_mask
+            data_item['label'] += label
+        add_item(self.samples[idx])
+        if self.augment:
+            augmented_view = self.samples[idx].augment()
+            add_item(augmented_view)
+        data_item['label2tag'] = self.label2tag
+        return data_item
 
     def __getitem__(self, index):
         data_item = self.__populate__(index)
@@ -232,11 +271,12 @@ class ContinualNerDataset(NerDataset):
     """
     Continual NER Dataset
     """
-    def __init__(self, file_path: str, tokenizer, max_length: int, label_offset: int=0, ignore_label_id: int=-1):
+    def __init__(self, file_path: str, tokenizer, augment=False, max_length:int=10, label_offset:int=0, ignore_label_id:int=-1):
         if not os.path.exists(file_path):
             logger.error(f"[ERROR] Data file {file_path} does not exist!")
             assert(0)
         self.tokenizer = tokenizer
+        self.augment = augment
         self.samples, self.classes = self.__load_data_from_file__(file_path)
         self.tag2label = {tag:idx + label_offset + 1 for idx, tag in enumerate(list(self.classes))}
         self.tag2label['O'] = 0
@@ -249,8 +289,9 @@ class MultiNerDataset(NerDataset):
     """
     Multi NER Dataset
     """
-    def __init__(self, tokenizer, max_length: int, ignore_label_id: int=-1):
+    def __init__(self, tokenizer, augment=False, max_length:int=10, ignore_label_id:int=-1):
         self.tokenizer = tokenizer
+        self.augment = augment
         self.samples = []
         self.tag2label, self.label2tag = {}, {}
         self.tag2label['O'] = 0
@@ -259,7 +300,7 @@ class MultiNerDataset(NerDataset):
         self.ignore_label_id = ignore_label_id
     
     
-    def append(self, file_path: str, label_offset: int=0):
+    def append(self, file_path:str, label_offset:int=0):
         '''
         Append new dataset
         return: size of unseen type set
@@ -290,14 +331,14 @@ def collate_fn(data):
     batch['label2tag'] = data[0]['label2tag']
     return batch
 
-def get_loader(dataset, batch_size):
+def get_loader(dataset, batch_size, num_workers=4):
     if dataset:
         data_loader = DataLoader(
             dataset=dataset,
             batch_size=batch_size,
             shuffle=True,
             pin_memory=True,
-            num_workers=4,
+            num_workers=num_workers,
             collate_fn=collate_fn
         )
         return data_loader
@@ -305,14 +346,14 @@ def get_loader(dataset, batch_size):
         return None
 
 if __name__ == '__main__':
-    file_path='../data/few-nerd/coarse/disjoint/art/train.txt'
+    file_path='data/few-nerd/supervised/train.txt'
     tokenizer=BertTokenizer.from_pretrained('bert-base-uncased')
     max_length=100
     label_offset=10
-    dataset = ContinualNerDataset(file_path, tokenizer, max_length, label_offset=label_offset)
-    train_loader = get_loader(dataset, batch_size=10)
+    dataset = NerDataset(file_path, tokenizer, augment=True, max_length=max_length)
+    train_loader = get_loader(dataset, batch_size=2, num_workers=4)
     for i, batch in enumerate(train_loader):
-        with open('batch_example_new.log', 'w') as f:
+        with open('batch_example.txt', 'w') as f:
             f.writelines(str(batch))
         break
 

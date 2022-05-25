@@ -27,7 +27,7 @@ class SupervisedSetting:
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
         dataset_path = get_dataset_path(args.dataset)
         logger.info('loading data...')
-        train_dataset = NerDataset(os.path.join(dataset_path, 'supervised/train.txt'), tokenizer, max_length=args.max_length)
+        train_dataset = NerDataset(os.path.join(dataset_path, 'supervised/train.txt'), tokenizer, augment=args.augment, max_length=args.max_length)
         val_dataset = NerDataset(os.path.join(dataset_path, 'supervised/dev.txt'), tokenizer, max_length=args.max_length)
         test_dataset = NerDataset(os.path.join(dataset_path, 'supervised/test.txt'), tokenizer, max_length=args.max_length)
         logger.info(f'train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
@@ -50,7 +50,7 @@ class CiSetting:
         result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in ci_tasks}
         continual_episode = ContinualNerEpisode(args, result_dict)
         for task in ci_tasks:
-            train_dataset = ContinualNerDataset(os.path.join(dataset_path, ci_tasks[task], 'train.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
+            train_dataset = ContinualNerDataset(os.path.join(dataset_path, ci_tasks[task], 'train.txt'), tokenizer, augment=args.augment, label_offset=label_offset, max_length=args.max_length)
             val_dataset = ContinualNerDataset(os.path.join(dataset_path, ci_tasks[task], 'dev.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
             test_dataset = ContinualNerDataset(os.path.join(dataset_path,  ci_tasks[task], 'test.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
             logger.info(f'[TASK {task}] train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
@@ -77,7 +77,7 @@ class OnlineSetting:
         online_tasks = PROTOCOLS[args.setting + ' ' + args.dataset]
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
         dataset_path = get_dataset_path(args.dataset)
-        online_dataset = MultiNerDataset(tokenizer=tokenizer, max_length=args.max_length)
+        online_dataset = MultiNerDataset(tokenizer=tokenizer, augment=args.augment, max_length=args.max_length)
         label_offset = 0
         splits = {'train.txt', 'dev.txt', 'test.txt'}
         for task in online_tasks:

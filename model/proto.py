@@ -1,6 +1,7 @@
 import logging
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from model import NERModel
 
@@ -13,6 +14,7 @@ class ProtoNet(NERModel):
         self.drop = nn.Dropout()
         self.dot = dot
         self.global_protos = {}
+        self.proj = nn.Linear(in_features=2 * word_encoder.output_dim, out_features=word_encoder.output_dim)
 
     def __dist__(self, x, y, dim):
         if self.dot:
@@ -28,11 +30,6 @@ class ProtoNet(NERModel):
         proto = []
         assert tag.size(0) == embedding.size(0)
         for label in range(torch.max(tag) + 1):
-            # mean = torch.mean(embedding[tag==label], dim=0)
-            # if not torch.isnan(mean).any():
-            #     proto.append(mean)
-            # else:
-            #     proto.append(torch.zeros_like(mean))
             proto.append(self.global_protos[label])
         proto = torch.stack(proto, 0)
         return proto
@@ -51,8 +48,10 @@ class ProtoNet(NERModel):
             else:
                 if not torch.isnan(mean).any():
                 # !!! novel
-                    new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
+                    # new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
+                    new_proto = self.proj(torch.cat((self.global_protos[label], mean)))
                     self.global_protos[label] = new_proto
+                    # self.global_protos[label] = mean
                 
     
     def _get_global_protos(self):
