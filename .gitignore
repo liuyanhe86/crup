@@ -9,6 +9,7 @@ apex
 *deprecated.py
 !download.sh
 *.zip
+baselines/
 
 
 # Byte-compiled / optimized / DLL files
