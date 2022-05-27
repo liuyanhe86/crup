@@ -3,8 +3,9 @@ import logging
 import os
 
 from transformers import BertTokenizer
+from util.args import TypedArgumentParser
 from util.datautils import ContinualNerDataset, MultiNerDataset, NerDataset
-from util.episode import ContinualNerEpisode, OnlineNerEpisode, SupNerEpisode
+from util.episode import ContinualNerEpisode, OnlineNerEpisode, SupConNerEpisode, SupNerEpisode
 from util.tasks import PROTOCOLS
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ def get_dataset_path(dataset):
 
 class SupervisedSetting:
 
-    def execute(self, args, ckpt=None):
+    def execute(self, args:TypedArgumentParser, ckpt=None):
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
         dataset_path = get_dataset_path(args.dataset)
         logger.info('loading data...')
@@ -31,7 +32,10 @@ class SupervisedSetting:
         val_dataset = NerDataset(os.path.join(dataset_path, 'supervised/dev.txt'), tokenizer, max_length=args.max_length)
         test_dataset = NerDataset(os.path.join(dataset_path, 'supervised/test.txt'), tokenizer, max_length=args.max_length)
         logger.info(f'train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
-        sup_episode = SupNerEpisode(args, train_dataset, val_dataset, test_dataset)
+        if args.augment:
+            sup_episode = SupConNerEpisode(args, train_dataset, val_dataset, test_dataset)
+        else:
+            sup_episode = SupNerEpisode(args, train_dataset, val_dataset, test_dataset)
         if not args.only_test:
             sup_episode.train(load_ckpt=args.load_ckpt, save_ckpt=ckpt)
         # test
@@ -40,7 +44,7 @@ class SupervisedSetting:
         logger.info('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f'%(fp, fn, within, outer))
 
 class CiSetting:
-    def execute(self, args, ckpt=None):
+    def execute(self, args: TypedArgumentParser, ckpt=None):
         logger.info('loading data...')
         ci_tasks = PROTOCOLS[args.setting + ' ' + args.dataset]
         task_id = 0
@@ -72,7 +76,7 @@ class CiSetting:
         output_continual_results(args, result_dict)
     
 class OnlineSetting:
-    def execute(self, args, ckpt):
+    def execute(self, args: TypedArgumentParser, ckpt):
         logger.info('loading data...')
         online_tasks = PROTOCOLS[args.setting + ' ' + args.dataset]
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
@@ -91,7 +95,7 @@ class OnlineSetting:
         logger.info('Online finished!')
 
 class MultiTaskSetting:
-    def execute(self, args, ckpt):
+    def execute(self, args: TypedArgumentParser, ckpt):
         logger.info('loading data...')
         multi_task_pathes = PROTOCOLS[args.setting + ' ' + args.dataset]
         label_offset = 0
@@ -123,7 +127,7 @@ class MultiTaskSetting:
         logger.info('Multi-task finished!')
         output_continual_results(args, result_dict)
 
-def output_continual_results(args, result_dict):       
+def output_continual_results(args: TypedArgumentParser, result_dict):       
     output_dir = f'output/{args.setting}_{args.dataset}_{args.model}'
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)

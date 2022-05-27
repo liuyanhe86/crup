@@ -2,6 +2,7 @@ import logging
 import numpy as np
 import os
 import random
+import string
 from typing import Dict, List, Tuple
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -85,7 +86,24 @@ class Sample(SampleBase):
             tag_class.remove('O')
         return tag_class
     
-    def augment(self):
+    def remove_augment(self):
+        '''
+        Get augmented view of sample.
+        ''' 
+        augmented_words, augmented_tags = [], []
+        rand_index = random.randint(0, len(self.tags) - 1)
+        while self.tags[rand_index] != 'O':
+            rand_index = random.randint(0, len(self.tags) - 1)
+        for i, word in enumerate(self.words):
+            if i != rand_index:
+                augmented_words.append(word)
+                augmented_tags.append(self.tags[i])
+        assert 0 < len(augmented_words) < len(self.words)
+        augment_view = Sample()
+        augment_view.set_sample(augmented_words, augmented_tags)
+        return augment_view
+    
+    def permutation_augment(self):
         '''
         Get augmented view of sample.
         '''
@@ -252,8 +270,10 @@ class NerDataset(Dataset):
             data_item['label'] += label
         add_item(self.samples[idx])
         if self.augment:
-            augmented_view = self.samples[idx].augment()
-            add_item(augmented_view)
+            permutation_view = self.samples[idx].permutation_augment()
+            # remove_view = self.samples[idx].remove_augment()
+            add_item(permutation_view)
+            # add_item(remove_view)
         data_item['label2tag'] = self.label2tag
         return data_item
 

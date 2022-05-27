@@ -6,19 +6,20 @@ from torch import nn
 from tqdm import tqdm
 from torch.optim import AdamW, SGD
 
+from .args import TypedArgumentParser
 from .datautils import get_loader, NerDataset
 from model import BERTWordEncoder, BertTagger, PCP, ProtoNet
 
 logger = logging.getLogger(__name__)
 
-def get_model(args):
+def get_model(args: TypedArgumentParser):
     word_encoder = BERTWordEncoder(args.pretrain_ckpt)
     if args.model == 'ProtoNet':
         model = ProtoNet(word_encoder, dot=args.dot)
     elif args.model == 'Bert-Tagger':
         model = BertTagger(word_encoder)
     elif args.model == 'PCP':
-        model = PCP(word_encoder, temperature=args.temperature, cpl=args.cpl, dot=args.dot)
+        model = PCP(word_encoder, temperature=args.temperature, dot=args.dot)
     else:
         raise NotImplementedError(f'Error: Model {args.model} not implemented!')
     if torch.cuda.is_available():
@@ -27,7 +28,7 @@ def get_model(args):
 
 class SupNerEpisode:
 
-    def __init__(self, args, train_dataset:NerDataset=None, val_dataset:NerDataset=None, test_dataset:NerDataset=None):
+    def __init__(self, args: TypedArgumentParser, train_dataset:NerDataset=None, val_dataset:NerDataset=None, test_dataset:NerDataset=None):
         self.args = args
         self.model, self.word_encoder = get_model(args)
         self.train_dataset = train_dataset
@@ -38,12 +39,11 @@ class SupNerEpisode:
         self.test_data_loader = get_loader(test_dataset, batch_size=args.batch_size, num_workers=4)
 
     def initialize_model(self):
-        if self.args.model == 'Bert-Tagger':
-            lc = nn.Linear(in_features=self.word_encoder.output_dim, out_features=len(self.train_dataset.get_label_set()))
-            if torch.cuda.is_available():
-                self.model.add_module('lc', lc.cuda())
-            else:
-                self.model.add_module('lc', lc)
+        lc = nn.Linear(in_features=self.word_encoder.output_dim, out_features=len(self.train_dataset.get_label_set()))
+        if torch.cuda.is_available():
+            self.model.add_module('lc', lc.cuda())
+        else:
+            self.model.add_module('lc', lc)
     
     def __load_model__(self, ckpt):
         '''
@@ -68,7 +68,7 @@ class SupNerEpisode:
             return x.item()
 
     def train(self, load_ckpt=None, save_ckpt=None):
-        logger.info("Start training...")
+        logger.info('[CE] Start training...')
         self.initialize_model()
         # Init optimizer
         parameters_to_optimize = self.model.get_parameters_to_optimize()
@@ -78,7 +78,7 @@ class SupNerEpisode:
             optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
         else:
             logger.info('Optimizer: AdamW')
-            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr, correct_bias=False)
+            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
         # load model
         if load_ckpt:
             state_dict = self.__load_model__(load_ckpt)['state_dict']
@@ -89,11 +89,6 @@ class SupNerEpisode:
                     continue
                 logger.info('load {} from {}'.format(name, load_ckpt))
                 own_state[name].copy_(param)
-
-        if self.args.fp16:
-            from apex import amp
-            self.model, optimizer = amp.initialize(self.model, optimizer, opt_level='O1')
-
         self.model.train()
 
         # Training
@@ -121,11 +116,7 @@ class SupNerEpisode:
                 loss = self.model.loss(logits, label)
                 tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
                 optimizer.zero_grad()
-                if self.args.fp16:
-                    with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
-                else:
-                    loss.backward()
+                loss.backward()
                 optimizer.step()
 
                 epoch_loss += self.item(loss.data)
@@ -164,7 +155,6 @@ class SupNerEpisode:
         if epoch + 1 < self.args.train_epoch:
             logger.info('Early stop')
         logger.info(f'Finish training {self.args.model} on {self.args.dataset} in {self.args.setting} setting.')
-
 
     def eval(self, ckpt=None): 
         logger.info('Start evaluating...')
@@ -267,9 +257,75 @@ class SupNerEpisode:
             logger.info('[VAL] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
         return precision, recall, f1, fp_error, fn_error, within_error, outer_error    
 
-class ContinualNerEpisode(SupNerEpisode):
-    def __init__(self, args, result_dict):
-        SupNerEpisode.__init__(self, args)
+class SupConNerEpisode(SupNerEpisode):
+    
+    def __init__(self, args: TypedArgumentParser, train_dataset: NerDataset = None, val_dataset: NerDataset = None, test_dataset: NerDataset = None):
+        SupNerEpisode.__init__(self, args, train_dataset, val_dataset, test_dataset)
+
+    def train(self, load_ckpt=None, save_ckpt=None):
+        logger.info('[SC] Start training...')
+        # Init optimizer
+        parameters_to_optimize = self.model.get_parameters_to_optimize()
+
+        if self.args.use_sgd:
+            logger.info('Optimizer: SGD')
+            optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
+        else:
+            logger.info('Optimizer: AdamW')
+            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
+        # load model
+        if load_ckpt:
+            state_dict = self.__load_model__(load_ckpt)['state_dict']
+            own_state = super().model.state_dict()
+            for name, param in state_dict.items():
+                if name not in own_state:
+                    logger.info('ignore {}'.format(name))
+                    continue
+                logger.info('load {} from {}'.format(name, load_ckpt))
+                own_state[name].copy_(param)
+
+        self.model.train()
+        epoch_loss = 0.
+        epoch_sample = 0
+        epoch = 0
+        while epoch + 1 < self.args.train_epoch:
+            it = 0
+            for _, batch in tqdm(enumerate(self.train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
+                label = torch.cat(batch['label'], 0)
+                if torch.cuda.is_available():
+                    for k in batch:
+                        if k != 'label' and k != 'label2tag':
+                            batch[k] = batch[k].cuda()
+                    label = label.cuda()
+
+                embedding = self.model.contrastive_forward(batch)
+                loss = self.model.supcon_loss(embedding, label)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                epoch_loss += self.item(loss.data)
+                epoch_sample += 1
+                if (it + 1) % 100 == 0:
+                    logger.info('[TRAIN] it: {0} | loss: {1:2.6f} '
+                                .format(it + 1, epoch_loss / epoch_sample))
+                it += 1
+            logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f}'\
+                .format(epoch + 1, epoch_loss/ epoch_sample) + '\r')
+            epoch_loss = 0.
+            epoch_sample = 0
+            epoch += 1
+        torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
+        logger.info('Finish contrastive training.')
+        self.model.freeze_encoder()
+        super().train(load_ckpt=save_ckpt, save_ckpt=save_ckpt)
+
+            
+
+
+class ContinualNerEpisode(SupConNerEpisode):
+    def __init__(self, args: TypedArgumentParser, result_dict: dict):
+        SupConNerEpisode.__init__(self, args)
         self.test_data_loaders = {}
         self.test_datasets = {}
         self.result_dict = result_dict
@@ -383,7 +439,7 @@ class ContinualNerEpisode(SupNerEpisode):
 
 class OnlineNerEpisode(SupNerEpisode):
     def __init__(self, args, dataset=None):
-        SupNerEpisode.__init__(self, args)
+        super().__init__(self, args)
         self.dataset = dataset
         self.data_loader = get_loader(dataset=dataset, batch_size=args.batch_size, num_workers=8)
         
