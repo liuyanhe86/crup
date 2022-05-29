@@ -32,11 +32,8 @@ class SupNerEpisode:
         self.args = args
         self.model, self.word_encoder = get_model(args)
         self.train_dataset = train_dataset
-        self.train_data_loader = get_loader(train_dataset, batch_size=args.batch_size, num_workers=8)
         self.val_dataset = val_dataset
-        self.val_data_loader = get_loader(val_dataset, batch_size=args.batch_size, num_workers=0)
         self.test_dataset = test_dataset
-        self.test_data_loader = get_loader(test_dataset, batch_size=args.batch_size, num_workers=4)
 
     def initialize_model(self):
         lc = nn.Linear(in_features=self.word_encoder.output_dim, out_features=len(self.train_dataset.get_label_set()))
@@ -75,10 +72,10 @@ class SupNerEpisode:
 
         if self.args.use_sgd:
             logger.info('Optimizer: SGD')
-            optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
+            optimizer = SGD(parameters_to_optimize, lr=self.args.classifier_lr)
         else:
             logger.info('Optimizer: AdamW')
-            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
+            optimizer = AdamW(parameters_to_optimize, lr=self.args.classifier_lr)
         # load model
         if load_ckpt:
             state_dict = self.__load_model__(load_ckpt)['state_dict']
@@ -101,9 +98,10 @@ class SupNerEpisode:
 
         epoch = 0
         best_count = 0
+        train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8)
         while epoch + 1 < self.args.train_epoch and best_count < 3:
             it = 0
-            for _, batch in tqdm(enumerate(self.train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
+            for _, batch in tqdm(enumerate(train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
                 label = torch.cat(batch['label'], 0)
                 if torch.cuda.is_available():
                     for k in batch:
@@ -164,7 +162,7 @@ class SupNerEpisode:
         is_test = False
         if ckpt is None:
             logger.info("Use val dataset")
-            eval_data_loader = self.val_data_loader
+            eval_data_loader = get_loader(self.val_dataset, batch_size=self.args.batch_size, num_workers=0)
             total_eval_epoch = len(self.val_dataset) // self.args.batch_size
         else:
             logger.info("Use test dataset")
@@ -175,7 +173,7 @@ class SupNerEpisode:
                     if name not in own_state:
                         continue
                     own_state[name].copy_(param)
-            eval_data_loader = self.test_data_loader
+            eval_data_loader = get_loader(self.test_dataset, batch_size=self.args.batch_size, num_workers=4)
             total_eval_epoch = len(self.test_dataset) // self.args.batch_size
             is_test = True
 
@@ -269,10 +267,10 @@ class SupConNerEpisode(SupNerEpisode):
 
         if self.args.use_sgd:
             logger.info('Optimizer: SGD')
-            optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
+            optimizer = SGD(parameters_to_optimize, lr=self.args.encoder_lr)
         else:
             logger.info('Optimizer: AdamW')
-            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
+            optimizer = AdamW(parameters_to_optimize, lr=self.args.encoder_lr)
         # load model
         if load_ckpt:
             state_dict = self.__load_model__(load_ckpt)['state_dict']
@@ -288,9 +286,11 @@ class SupConNerEpisode(SupNerEpisode):
         epoch_loss = 0.
         epoch_sample = 0
         epoch = 0
+        self.train_dataset.set_augment(True)
+        train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8)
         while epoch + 1 < self.args.train_epoch:
             it = 0
-            for _, batch in tqdm(enumerate(self.train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
+            for _, batch in tqdm(enumerate(train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
                 label = torch.cat(batch['label'], 0)
                 if torch.cuda.is_available():
                     for k in batch:
@@ -318,6 +318,7 @@ class SupConNerEpisode(SupNerEpisode):
         torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
         logger.info('Finish contrastive training.')
         self.model.freeze_encoder()
+        self.train_dataset.set_augment(False)
         super().train(load_ckpt=save_ckpt, save_ckpt=save_ckpt)
 
             
@@ -326,17 +327,14 @@ class SupConNerEpisode(SupNerEpisode):
 class ContinualNerEpisode(SupConNerEpisode):
     def __init__(self, args: TypedArgumentParser, result_dict: dict):
         SupConNerEpisode.__init__(self, args)
-        self.test_data_loaders = {}
         self.test_datasets = {}
         self.result_dict = result_dict
     
     def append_task(self, task, train_dataset: NerDataset, val_dataset: NerDataset, test_dataset: NerDataset):
+        self.task = task
         self.train_dataset = train_dataset
-        self.train_data_loader = get_loader(train_dataset, batch_size=self.args.batch_size, num_workers=8)
         self.val_dataset = val_dataset
-        self.val_data_loader = get_loader(val_dataset, batch_size=self.args.batch_size, num_workers=0)
         self.test_datasets[task] = test_dataset
-        self.test_data_loaders[task] = get_loader(test_dataset, batch_size=self.args.batch_size, num_workers=4)
 
     def eval(self, ckpt=None): 
         logger.info('Start evaluating...')
@@ -413,7 +411,8 @@ class ContinualNerEpisode(SupConNerEpisode):
         if ckpt is None:
             logger.info("Use val dataset")
             with torch.no_grad():
-                precision, recall, f1, fp, fn, within, outer = eval_one_loader(self.val_data_loader, total=len(self.val_dataset) // self.args.batch_size)
+                val_data_loader = get_loader(self.val_dataset, batch_size=self.args.batch_size, num_workers=0)
+                precision, recall, f1, fp, fn, within, outer = eval_one_loader(val_data_loader, total=len(self.val_dataset) // self.args.batch_size)
                 logger.info('[VAL] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
                 return precision, recall, f1, fp, fn, within, outer
         else:
@@ -426,8 +425,9 @@ class ContinualNerEpisode(SupConNerEpisode):
                         continue
                     own_state[name].copy_(param)
             with torch.no_grad():
-                for task in self.test_data_loaders:
-                    precision, recall, f1, fp, fn, within, outer = eval_one_loader(self.test_data_loaders[task], total=len(self.test_datasets[task]) // self.args.batch_size)
+                for task in self.test_datasets:
+                    test_data_loader = get_loader(self.test_datasets[task], batch_size=self.args.batch_size, num_workers=4)
+                    precision, recall, f1, fp, fn, within, outer = eval_one_loader(test_data_loader, total=len(self.test_datasets[task]) // self.args.batch_size)
                     logger.info('[TEST] %s | RESULT: precision: %.4f, recall: %.4f, f1: %.4f \n ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f' % (task, precision, recall, f1, fp, fn, within, outer))
                     self.result_dict[task]['precision'].append(precision)
                     self.result_dict[task]['recall'].append(recall)
@@ -439,7 +439,7 @@ class ContinualNerEpisode(SupConNerEpisode):
 
 class OnlineNerEpisode(SupNerEpisode):
     def __init__(self, args, dataset=None):
-        super().__init__(self, args)
+        SupNerEpisode.__init__(self, args)
         self.dataset = dataset
         self.data_loader = get_loader(dataset=dataset, batch_size=args.batch_size, num_workers=8)
         
@@ -447,19 +447,16 @@ class OnlineNerEpisode(SupNerEpisode):
         logger.info("Start online learning...")
     
         # Init optimizer
-        parameters_to_optimize = model.get_parameters_to_optimize()
+        parameters_to_optimize = self.model.get_parameters_to_optimize()
 
         if self.args.use_sgd:
             logger.info('Optimizer: SGD')
-            optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
+            optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.encoder_lr)
         else:
             logger.info('Optimizer: AdamW')
-            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr, correct_bias=False)        
-        if self.args.fp16:
-            from apex import amp
-            model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
+            optimizer = AdamW(parameters_to_optimize, lr=self.args.encoder_lr, correct_bias=False)        
 
-        model.train()
+        self.model.train()
         # Training
         epoch_loss = 0.0
         epoch_sample = 0
@@ -474,16 +471,12 @@ class OnlineNerEpisode(SupNerEpisode):
                     if k != 'label' and k != 'label2tag':
                         batch[k] = batch[k].cuda()
                 label = label.cuda()
-            logits, pred = model(batch)
+            logits, pred = self.model(batch)
             assert logits.shape[0] == label.shape[0]
-            loss = model.loss(logits, label)
-            tmp_pred_cnt, tmp_label_cnt, correct = model.metrics_by_entity(pred, label)
+            loss = self.model.loss(logits, label)
+            tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
             optimizer.zero_grad()
-            if self.args.fp16:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.backward()
+            loss.backward()
             optimizer.step()
 
             epoch_loss += self.item(loss.data)
@@ -504,5 +497,5 @@ class OnlineNerEpisode(SupNerEpisode):
                 label_cnt = 0
                 correct_cnt = 0
             it += 1
-        torch.save({'state_dict': model.state_dict()}, save_ckpt)
+        torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
         logger.info(f'Finish learning {self.args.model}.')

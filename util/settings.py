@@ -28,7 +28,7 @@ class SupervisedSetting:
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
         dataset_path = get_dataset_path(args.dataset)
         logger.info('loading data...')
-        train_dataset = NerDataset(os.path.join(dataset_path, 'supervised/train.txt'), tokenizer, augment=args.augment, max_length=args.max_length)
+        train_dataset = NerDataset(os.path.join(dataset_path, 'supervised/train.txt'), tokenizer, max_length=args.max_length)
         val_dataset = NerDataset(os.path.join(dataset_path, 'supervised/dev.txt'), tokenizer, max_length=args.max_length)
         test_dataset = NerDataset(os.path.join(dataset_path, 'supervised/test.txt'), tokenizer, max_length=args.max_length)
         logger.info(f'train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')

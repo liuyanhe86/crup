@@ -142,12 +142,12 @@ class NerDataset(Dataset):
     """
     NER Dataset
     """
-    def __init__(self, file_path:str, tokenizer, augment=False, max_length:int=10, ignore_label_id:int=-1):
+    def __init__(self, file_path:str, tokenizer, max_length:int=10, ignore_label_id:int=-1):
         if not os.path.exists(file_path):
             logger.error(f"data file {file_path} does not exist!")
             assert(0)
         self.tokenizer = tokenizer
-        self.augment = augment
+        self.augment = False
         self.samples, self.classes = self.__load_data_from_file__(file_path)
         # add 'O' and make sure 'O' is labeled 0
         distinct_tags = ['O'] + list(self.classes)
@@ -286,6 +286,9 @@ class NerDataset(Dataset):
 
     def get_label_set(self):
         return set(self.label2tag.keys())
+    
+    def set_augment(self, value):
+        self.augment = value
 
 class ContinualNerDataset(NerDataset):
     """

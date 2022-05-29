@@ -10,7 +10,8 @@ class TypedArgumentParser(Tap):
     # warmup_step: int=300  # warm up steps before training
     max_length: int=50 # max length of sentence
     augment: bool=False # whether to use data augment
-    lr: float=2e-5  # learning rate
+    encoder_lr: float=2e-5  # encoder learning rate
+    classifier_lr: float=1e-3  # classifier learning rate
     load_ckpt: str=None  # load ckpt
     save_ckpt: str=None  # save ckpt
     ckpt_name: str=''  # checkpoint name

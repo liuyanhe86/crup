@@ -5,5 +5,4 @@ python main.py \
         --setting online \
         --model ProtoNet \
         --batch_size 32 \
-        --val_step 10 \
-        --lr 2e-5
+        --val_step 10
