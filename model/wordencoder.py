@@ -12,9 +12,9 @@ class BERTWordEncoder(nn.Module):
     def forward(self, sentences, attention_masks):
         outputs = self.bert(sentences, attention_mask=attention_masks, output_hidden_states=True, return_dict=True)
             
-        # use the sum of the last 4 layers
-        last_four_hidden_states = torch.cat([hidden_state.unsqueeze(0) for hidden_state in outputs['hidden_states'][-4:]], 0)
-        del outputs
-        word_embeddings = torch.sum(last_four_hidden_states, 0) # [num_sent, number_of_tokens, 768]
-        
+        # # use the sum of the last 4 layers
+        # last_four_hidden_states = torch.cat([hidden_state.unsqueeze(0) for hidden_state in outputs['hidden_states'][-4:]], 0)
+        # del outputs
+        # word_embeddings = torch.sum(last_four_hidden_states, 0) # [num_sent, number_of_tokens, 768]
+        word_embeddings = outputs[0]
         return word_embeddings

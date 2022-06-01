@@ -2,9 +2,10 @@ import logging
 import numpy as np
 import os
 import random
-import string
 from typing import Dict, List, Tuple
 import torch
+# torch.set_printoptions(profile='full')
+# os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 from torch.utils.data import DataLoader, Dataset
 from transformers import BertTokenizer
 import sys
@@ -372,10 +373,11 @@ if __name__ == '__main__':
     file_path='data/few-nerd/supervised/train.txt'
     tokenizer=BertTokenizer.from_pretrained('bert-base-uncased')
     max_length=100
-    label_offset=10
-    dataset = NerDataset(file_path, tokenizer, augment=True, max_length=max_length)
-    train_loader = get_loader(dataset, batch_size=2, num_workers=4)
+    dataset = NerDataset(file_path, tokenizer, max_length=max_length)
+    dataset.set_augment(True)
+    train_loader = get_loader(dataset, batch_size=32, num_workers=8)
     for i, batch in enumerate(train_loader):
+        print(f'{batch["sentence"].shape}')
         with open('batch_example.txt', 'w') as f:
             f.writelines(str(batch))
         break

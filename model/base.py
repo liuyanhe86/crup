@@ -51,6 +51,8 @@ class NERModel(nn.Module):
         return self.cost(logits.view(-1, N), label.view(-1))
     
     def supcon_loss(self, embedding, labels):
+        embedding = embedding[labels != self.ignore_index]
+        labels = labels[labels != self.ignore_index]
         z_i, z_j = embedding, embedding.T
         dot_product_tempered = torch.mm(z_i, z_j) / self.temperature  # z_i dot z_j / tau
         # Minus max for numerical stability with exponential. Same done in cross entropy. Epsilon added to avoid log(0)
