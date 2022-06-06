@@ -21,20 +21,12 @@ class PCP(NERModel):
             nn.ReLU(inplace=True),
             nn.Linear(in_features=word_encoder.output_dim, 
                       out_features=word_encoder.output_dim)
-                    # out_features=384)
         )
-        self.global_embeddings = {}
-        # self.proto_dist = {}
-        # self.cached_mean = {}
+        self.global_protos = {}
         self.setting = setting
         self.temperature = temperature
         self.dot = dot
     
-    # def add_heads(self, label_set):
-    #     for label in label_set:
-    #         if label not in self.global_embeddings:
-    #             self.add_module(f'shift_head_{label}', nn.Linear(in_features=self.embedding_dim, out_features=self.embedding_dim).cuda())
-
     def __dist__(self, x, y, dim):
         if self.dot:
             return (x * y).sum(dim)
@@ -55,12 +47,12 @@ class PCP(NERModel):
         local_protos = []
         for label in tag_set:
             mean = torch.mean(embedding[tag==label], dim=0)
-            # if label not in self.global_protos:
-            #     self.global_protos[label] = mean
-            # else:
-            #     # !!! novel
-            #     # new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
-            #     self.global_protos[label] = new_proto
+            if label not in self.global_protos:
+                self.global_protos[label] = mean
+            else:
+                # !!! novel
+                new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
+                self.global_protos[label] = new_proto
             # if label in self.global_protos:
             #     # dist = torch.pow(mean - self.global_protos[label], 2).sum()                
             #     # dist = (mean * self.global_protos[label]).sum()
@@ -83,15 +75,15 @@ class PCP(NERModel):
     def _get_global_protos(self):
         index2label, protos = {}, []
         index = 0
-        for label in self.global_embeddings:
-            protos.append(torch.mean(self.global_embeddings[label]))
+        for label in self.global_protos:
+            protos.append(self.global_protos[label])
             index2label[index] = label
             index += 1
         protos = torch.stack(protos)
         return index2label, protos
 
 
-    def contrastive_forward(self, batch):
+    def forward(self, batch):
         embedding = self.word_encoder(batch['sentence'], batch['attention_mask'])
         embedding = self.drop(embedding)  # [batch_size, max_len, 768]
         embedding = embedding[batch['text_mask']==1]  #.view(-1, embedding.size(-1))
@@ -108,28 +100,31 @@ class PCP(NERModel):
         embedding = F.normalize(embedding, p=2, dim=1)
         return embedding, pred
     
-    def forward(self, batch):
-        embedding = self.word_encoder(batch['sentence'], batch['attention_mask'])
-        embedding = self.drop(embedding)  # [batch_size, max_len, 768]
-        embedding = embedding[batch['text_mask']==1].view(-1, embedding.size(-1))
-        logits = self.lc(embedding)
-        _, pred = torch.max(logits, 1)
-        return logits, pred
+    def loss(self, embedding, labels):
+        return self._supcon_loss(embedding, labels)
     
-    def add_embedding(self, batch):
-        embedding = self.word_encoder(batch['sentence'], batch['attention_mask'])
-        embedding = self.drop(embedding)  # [batch_size, max_len, 768]
-        embedding = embedding[batch['text_mask']==1]
-        tag = batch['label']
-        tag = torch.cat(tag, 0)
-        tag_set = set([int(_) for _ in tag.tolist()])
-        tag_set.discard(self.ignore_index)
-        for label in tag_set:
-            labeled_embedding = embedding[tag == label]
-            if label in self.global_embeddings:
-                self.global_embeddings[label] = torch.cat((self.global_embeddings[label], labeled_embedding), dim=0)
-            else:
-                self.global_embeddings[label] = labeled_embedding
+    def _supcon_loss(self, embedding, labels):
+        embedding = embedding[labels != self.ignore_index]
+        labels = labels[labels != self.ignore_index]
+        z_i, z_j = embedding, embedding.T
+        dot_product_tempered = torch.mm(z_i, z_j) / self.temperature  # z_i dot z_j / tau
+        # Minus max for numerical stability with exponential. Same done in cross entropy. Epsilon added to avoid log(0)
+        exp_dot_tempered = (
+            torch.exp(dot_product_tempered - torch.max(dot_product_tempered, dim=1, keepdim=True)[0]) + 1e-5
+        )
+        mask_similar_class = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels)
+        if torch.cuda.is_available():
+            mask_similar_class.cuda()
+        if torch.cuda.is_available():
+            mask_anchor_out = (1 - torch.eye(exp_dot_tempered.shape[0]).cuda())
+        else:
+            mask_anchor_out = (1 - torch.eye(exp_dot_tempered.shape[0]))
+        mask_combined = mask_similar_class * mask_anchor_out
+        cardinality_per_batchs = torch.sum(mask_combined, dim=1)
+        log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered, dim=1, keepdim=True)))
+        supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_anchor_out, dim=1) / cardinality_per_batchs
+        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
+        return supervised_contrastive_loss
     
     def _regulization(self):
         pass

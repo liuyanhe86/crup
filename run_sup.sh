@@ -9,7 +9,7 @@ export CUDA_VISIBLE_DEVICES=2
 #         --dataset few-nerd \
 #         --setting sup \
 #         --model ProtoNet \
-#         --use_sgd \
+#         --lr 2e-5 \
 #         --dot
 
 python main.py \
