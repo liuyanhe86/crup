@@ -2,7 +2,7 @@ import logging
 import os
 
 import torch
-from torch import nn
+from torch import embedding, nn
 from tqdm import tqdm
 from torch.optim import AdamW, SGD
 
@@ -23,20 +23,21 @@ def get_model(args: TypedArgumentParser):
     else:
         raise NotImplementedError(f'Error: Model {args.model} not implemented!')
     if torch.cuda.is_available():
-        model.cuda()
-    return model, word_encoder
+        model = model.cuda()
+    return model
 
 class SupNerEpisode:
 
     def __init__(self, args: TypedArgumentParser, train_dataset:NerDataset=None, val_dataset:NerDataset=None, test_dataset:NerDataset=None):
         self.args = args
-        self.model, self.word_encoder = get_model(args)
+        self.model = get_model(args)
+        self.embedding_dim = 768
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.test_dataset = test_dataset
 
     def initialize_model(self):
-        lc = nn.Linear(in_features=self.word_encoder.output_dim, out_features=len(self.train_dataset.get_label_set()))
+        lc = nn.Linear(in_features=self.embedding_dim, out_features=len(self.train_dataset.get_label_set()))
         if torch.cuda.is_available():
             self.model.add_module('lc', lc.cuda())
         else:
@@ -65,17 +66,19 @@ class SupNerEpisode:
             return x.item()
 
     def train(self, load_ckpt=None, save_ckpt=None):
-        logger.info('Start training...')
+        if self.args.only_train_decoder:
+            logger.info('Start classifier training...')
+        else:
+            logger.info('Start joint training...')
         self.initialize_model()
         # Init optimizer
         parameters_to_optimize = self.model.get_parameters_to_optimize()
-        # if self.args.use_sgd:
-        # logger.info('Optimizer: SGD')
-        # optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
-        # else:
-        logger.info('Optimizer: AdamW')
-        optimizer = AdamW(parameters_to_optimize, lr=self.args.classifier_lr)
-        # load model
+        logger.info('Optimizer: SGD')
+        if not self.args.only_train_decoder:
+            optimizer = SGD(parameters_to_optimize, lr=self.args.decoder_lr)
+        else:
+            optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
+        
         if load_ckpt:
             state_dict = self.__load_model__(load_ckpt)['state_dict']
             own_state = self.model.state_dict()
@@ -121,11 +124,12 @@ class SupNerEpisode:
                 correct_cnt += correct
                 epoch_sample += 1
                 if (it + 1) % 100 == 0:
-                    precision = correct_cnt / pred_cnt
-                    recall = correct_cnt / label_cnt
-                    f1 = 2 * precision * recall / (precision + recall)
-                    logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
-                .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
+                    # precision = correct_cnt / pred_cnt
+                    # recall = correct_cnt / label_cnt
+                    # f1 = 2 * precision * recall / (precision + recall)
+                    logger.info('[TRAIN] it: {0} | loss: {1:2.6f}'.format(it+1, epoch_loss / epoch_sample))
+                #      | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
+                # .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
                 it += 1
             precision = correct_cnt / pred_cnt
             recall = correct_cnt / label_cnt
@@ -138,7 +142,7 @@ class SupNerEpisode:
                 self.model.train()
                 if f1 > best_f1:
                     logger.info('Best checkpoint')
-                    torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
+                    # torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
                     best_f1 = f1
                     best_count = 0
                 best_count += 1
@@ -210,36 +214,13 @@ class SupNerEpisode:
                 within_cnt += within
                 total_span_cnt += total_span
     
-        if pred_cnt == 0:
-            precision = 0
-            logger.error('pred_cnt is 0!')
-        else:
-            precision = correct_cnt / pred_cnt
-        
-        if label_cnt == 0:
-            recall = 0
-            logger.error('label_cnt is 0!')
-        else:
-            recall = correct_cnt /label_cnt
-        if precision + recall != 0:
-            f1 = 2 * precision * recall / (precision + recall)
-        else:
-            f1 = 0.0
-            logger.error('P and R is 0! f1 compute failed!')
-        if total_token_cnt == 0:
-            fp_error = 0
-            fn_error = 0
-            logger.error('total_token_cnt is 0!')
-        else:
-            fp_error = fp_cnt / total_token_cnt
-            fn_error = fn_cnt / total_token_cnt
-        if total_span_cnt == 0:
-            within_error = 0
-            outer_error = 0
-            logger.error('total_span_cnt is 0!')
-        else:
-            within_error = within_cnt / total_span_cnt
-            outer_error = outer_cnt / total_span_cnt
+        precision = correct_cnt / pred_cnt
+        recall = correct_cnt /label_cnt
+        f1 = 2 * precision * recall / (precision + recall)
+        fp_error = fp_cnt / total_token_cnt
+        fn_error = fn_cnt / total_token_cnt
+        within_error = within_cnt / total_span_cnt
+        outer_error = outer_cnt / total_span_cnt
         if is_test:
             logger.info('[TEST] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
         else:
@@ -252,83 +233,121 @@ class SupConNerEpisode(SupNerEpisode):
         SupNerEpisode.__init__(self, args, train_dataset, val_dataset, test_dataset)
 
     def train(self, load_ckpt=None, save_ckpt=None):
-        logger.info('Start training...')
-        # Init optimizer
-        parameters_to_optimize = self.model.get_parameters_to_optimize()
-        logger.info('Optimizer: AdamW')
-        optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
-        # load model
-        if load_ckpt:
-            state_dict = self.__load_model__(load_ckpt)['state_dict']
-            own_state = super().model.state_dict()
-            for name, param in state_dict.items():
-                if name not in own_state:
-                    logger.info('ignore {}'.format(name))
-                    continue
-                own_state[name].copy_(param)
+        if not self.args.only_train_decoder:
+            logger.info('Start embedding training...')
+            # Init optimizer
+            parameters_to_optimize = self.model.get_parameters_to_optimize()
+            if self.args.use_sgd:
+                logger.info('Optimizer: SGD')
+                optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
+            else:
+                logger.info('Optimizer: AdamW')
+                optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
+            # load model
+            if load_ckpt:
+                state_dict = self.__load_model__(load_ckpt)['state_dict']
+                own_state = super().model.state_dict()
+                for name, param in state_dict.items():
+                    if name not in own_state:
+                        logger.info('ignore {}'.format(name))
+                        continue
+                    own_state[name].copy_(param)
 
-        self.model.train()
-        epoch_loss = 0.
-        epoch_sample = 0
-        epoch = 0
-        best_count = 0
-        best_p = 0.0
-        pred_cnt = 0
-        label_cnt = 0
-        correct_cnt = 0
-        self.train_dataset.set_augment(True)
-        train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8)
-        while epoch + 1 < self.args.train_epoch and best_count < 3:
-            it = 0
-            for _, batch in tqdm(enumerate(train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
-                label = torch.cat(batch['label'], 0)
+            self.model.train()
+            epoch_loss = 0.
+            epoch_sample = 0
+            epoch = 0
+            best_count = 0
+            best_p = 0.0
+            pred_cnt = 0
+            label_cnt = 0
+            correct_cnt = 0
+            self.train_dataset.set_augment(True)
+            train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8)
+            while epoch + 1 < self.args.train_epoch and best_count < 3:
+                it = 0
+                for _, batch in tqdm(enumerate(train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
+                    label = torch.cat(batch['label'], 0)
+                    if torch.cuda.is_available():
+                        for k in batch:
+                            if k != 'label' and k != 'label2tag':
+                                batch[k] = batch[k].cuda()
+                        label = label.cuda()
+
+                    embedding, pred = self.model.contrastive_forward(batch)
+                    loss = self.model.supcon_loss(embedding, label)
+                    tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    pred_cnt += tmp_pred_cnt
+                    label_cnt += tmp_label_cnt
+                    correct_cnt += correct
+                    epoch_loss += self.item(loss.data)
+                    epoch_sample += 1
+                    if (it + 1) % 100 == 0:
+                        precision = correct_cnt / pred_cnt
+                        recall = correct_cnt / label_cnt
+                        logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | precision: {2:2.6f}, recall: {3:2.6f}'
+                                    .format(it + 1, epoch_loss / epoch_sample, precision, recall))
+                    it += 1
+                precision = correct_cnt / pred_cnt
+                recall = correct_cnt / label_cnt
+                logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f} | p: {2:2.6f}, r: {3:2.6f}'
+                            .format(epoch, epoch_loss / epoch_sample, precision, recall))
+                
+                if (epoch + 1) % self.args.val_step == 0:
+                    protos = self.get_all_protos(train_data_loader)
+                    self.model.global_protos = protos              
+                    p, _, _, _, _, _, _ = self.eval()
+                    self.model.train()
+                    if p > best_p:
+                        logger.info('Best checkpoint')
+                        torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
+                        best_p = p
+                        best_count = 0
+                    best_count += 1
+                epoch_loss = 0.
+                epoch_sample = 0.
+                pred_cnt = 0
+                label_cnt = 0
+                correct_cnt = 0    
+                epoch += 1
+            if epoch < self.args.train_epoch:
+                logger.info('Early stop.')        
+            torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
+            logger.info('Finish contrastive training.')
+        if not self.args.only_train_encoder:
+            self.model.word_encoder.requires_grad_(False)
+            self.train_dataset.set_augment(False)
+            super().train(load_ckpt=save_ckpt, save_ckpt=save_ckpt)
+
+    def get_all_protos(self, train_data_loader):
+        protos, embed_cnt = {}, {}
+        self.train_dataset.set_augment(False)
+        with torch.no_grad():
+            for _, batch in tqdm(enumerate(train_data_loader), desc='computing protos', total=len(self.train_dataset) // self.args.batch_size):
                 if torch.cuda.is_available():
                     for k in batch:
                         if k != 'label' and k != 'label2tag':
                             batch[k] = batch[k].cuda()
-                    label = label.cuda()
-
-                embedding, pred = self.model(batch)
-                loss = self.model.loss(embedding, label)
-                tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                pred_cnt += tmp_pred_cnt
-                label_cnt += tmp_label_cnt
-                correct_cnt += correct
-                epoch_loss += self.item(loss.data)
-                epoch_sample += 1
-                if (it + 1) % 100 == 0:
-                    precision = correct_cnt / pred_cnt
-                    recall = correct_cnt / label_cnt
-                    logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | p: {2:2.6f}, r: {3:2.6f}'
-                                .format(it + 1, epoch_loss / epoch_sample, precision, recall))
-                it += 1
-            precision = correct_cnt / pred_cnt
-            recall = correct_cnt / label_cnt
-            logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | p: {2:2.6f}, r: {3:2.6f}'
-                        .format(it + 1, epoch_loss / epoch_sample, precision, recall))
-            
-            if (epoch + 1) % self.args.val_step == 0:   
-                p, _, _, _, _, _, _ = self.eval()
-                self.model.train()
-                if p > best_p:
-                    logger.info('Best checkpoint')
-                    torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
-                    best_p = p
-                    best_count = 0
-                best_count += 1
-            epoch_loss = 0.
-            epoch_sample = 0.
-            pred_cnt = 0
-            label_cnt = 0
-            correct_cnt = 0    
-            epoch += 1
-        if epoch < self.args.train_epoch:
-            logger.info('Early stop.')        
-        logger.info('Finish contrastive training.')
+                embedding = self.model.represent(batch)
+                tag = batch['label']
+                tag = torch.cat(tag, 0)
+                tag_set = set([int(_) for _ in tag.tolist()])
+                tag_set.discard(self.model.ignore_index)
+                for label in tag_set:
+                    if label not in protos:
+                        protos[label] = torch.sum(embedding[tag == label], dim=0)
+                        embed_cnt[label] = embedding[tag == label].size(0)
+                    else:
+                        protos[label] = torch.sum(torch.cat((protos[label].unsqueeze(0), embedding[tag == label]), dim=0),dim=0)
+                        embed_cnt[label] += embedding[tag == label].size(0)
+        for key in protos:
+            protos[key] = protos[key] / embed_cnt[key]
+        self.train_dataset.set_augment(True)
+        return protos
 
 class ContinualNerEpisode(SupConNerEpisode):
     def __init__(self, args: TypedArgumentParser, result_dict: dict):
@@ -381,36 +400,13 @@ class ContinualNerEpisode(SupConNerEpisode):
                 within_cnt += within
                 total_span_cnt += total_span
 
-            if pred_cnt == 0:
-                precision = 0
-                logger.warning('pred_cnt is 0!')
-            else:
-                precision = correct_cnt / pred_cnt
-            
-            if label_cnt == 0:
-                recall = 0
-                logger.error('label_cnt is 0!')
-            else:
-                recall = correct_cnt /label_cnt
-            if precision + recall != 0:
-                f1 = 2 * precision * recall / (precision + recall)
-            else:
-                f1 = 0.0
-                logger.warning('P and R is 0! f1 compute failed!')
-            if total_token_cnt == 0:
-                fp_error = 0
-                fn_error = 0
-                logger.error('total_token_cnt is 0!')
-            else:
-                fp_error = fp_cnt / total_token_cnt
-                fn_error = fn_cnt / total_token_cnt
-            if total_span_cnt == 0:
-                within_error = 0
-                outer_error = 0
-                logger.error('total_span_cnt is 0!')
-            else:
-                within_error = within_cnt / total_span_cnt
-                outer_error = outer_cnt / total_span_cnt
+            precision = correct_cnt / pred_cnt
+            recall = correct_cnt /label_cnt
+            f1 = 2 * precision * recall / (precision + recall)
+            fp_error = fp_cnt / total_token_cnt
+            fn_error = fn_cnt / total_token_cnt
+            within_error = within_cnt / total_span_cnt
+            outer_error = outer_cnt / total_span_cnt
             
             return precision, recall, f1, fp_error, fn_error, within_error, outer_error
     
@@ -455,12 +451,12 @@ class OnlineNerEpisode(SupNerEpisode):
         # Init optimizer
         parameters_to_optimize = self.model.get_parameters_to_optimize()
 
-        # if self.args.use_sgd:
-        #     logger.info('Optimizer: SGD')
-        #     optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.encoder_lr)
-        # else:
-        logger.info('Optimizer: AdamW')
-        optimizer = AdamW(parameters_to_optimize, lr=self.args.lr, correct_bias=False)        
+        if self.args.use_sgd:
+            logger.info('Optimizer: SGD')
+            optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
+        else:
+            logger.info('Optimizer: AdamW')
+            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)        
 
         self.model.train()
         # Training

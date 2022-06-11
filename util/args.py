@@ -10,7 +10,8 @@ class TypedArgumentParser(Tap):
     # warmup_step: int=300  # warm up steps before training
     max_length: int=50 # max length of sentence
     augment: bool=False # whether to use data augment
-    lr: float=5e-2  # learning rate
+    lr: float=5e-2  # learning rate for encoder or joint training
+    decoder_lr: float=2e-5  # learning rate for classifier training
     load_ckpt: str=None  # load ckpt
     save_ckpt: str=None  # save ckpt
     ckpt_name: str=''  # checkpoint name
@@ -20,7 +21,9 @@ class TypedArgumentParser(Tap):
     pretrain_ckpt: str='bert-base-uncased'  # bert / roberta pre-trained checkpoint
     dot: bool=False  # use dot instead of L2 distance for proto
     temperature: float=0.1  # temperature for supervised contrastive loss
-    # use_sgd: bool=False  # use SGD instead of AdamW for BERT
+    use_sgd: bool=False  # use SGD instead of AdamW for BERT
+    only_train_encoder: bool=False  # only train encoder
+    only_train_decoder: bool=False  # only train decoder with fixed encoder parameters
     
     def __str__(self):
         return '; '.join([f'{name}: {self.__getattribute__(name)}' for name in self._get_argument_names()])

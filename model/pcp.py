@@ -1,6 +1,7 @@
 import logging
+from turtle import forward
 import torch
-from torch import nn
+from torch import embedding, nn
 import torch.nn.functional as F
 
 from model import NERModel
@@ -82,12 +83,36 @@ class PCP(NERModel):
         protos = torch.stack(protos)
         return index2label, protos
 
+    def _update_protos(self):
+        Z_c = self.word_encoder(self.current_batch['sentence'], self.current_batch['attention_mask'])
+        Z_c = self.drop(Z_c)
+        Z_c = Z_c[self.current_batch['text_mask']==1]
 
-    def forward(self, batch):
+        tag = self.current_batch['label']
+        tag = torch.cat(tag, 0)
+        tag_set = set([int(_) for _ in tag.tolist()])
+        tag_set.discard(self.ignore_index)
+        for i in tag_set:
+            Z_c_i = Z_c[tag==i]
+            if i not in self.global_protos:
+                self.global_protos[i] = torch.mean(Z_c_i, dim=0)
+            else:
+                mu_i = self.global_protos[i]
+                dist = torch.sum(torch.pow(Z_c - mu_i, 2), dim=1).mean()
+                # dist_mean = 
+                pass
+
+    def represent(self, batch):
         embedding = self.word_encoder(batch['sentence'], batch['attention_mask'])
         embedding = self.drop(embedding)  # [batch_size, max_len, 768]
         embedding = embedding[batch['text_mask']==1]  #.view(-1, embedding.size(-1))
+        return embedding
+
+    def contrastive_forward(self, batch):
+        embedding = self.represent(batch)
         if 'label' in batch:
+            self.current_batch = batch
+            self.Z_p = embedding
             index2tag, protos = self._get_local_protos(embedding, batch)
         else:
             index2tag, protos = self._get_global_protos()
@@ -99,32 +124,13 @@ class PCP(NERModel):
         embedding = self.proj_head(embedding)  # [num_tokens, contrastive_embed_dim]
         embedding = F.normalize(embedding, p=2, dim=1)
         return embedding, pred
-    
-    def loss(self, embedding, labels):
-        return self._supcon_loss(embedding, labels)
-    
-    def _supcon_loss(self, embedding, labels):
-        embedding = embedding[labels != self.ignore_index]
-        labels = labels[labels != self.ignore_index]
-        z_i, z_j = embedding, embedding.T
-        dot_product_tempered = torch.mm(z_i, z_j) / self.temperature  # z_i dot z_j / tau
-        # Minus max for numerical stability with exponential. Same done in cross entropy. Epsilon added to avoid log(0)
-        exp_dot_tempered = (
-            torch.exp(dot_product_tempered - torch.max(dot_product_tempered, dim=1, keepdim=True)[0]) + 1e-5
-        )
-        mask_similar_class = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels)
-        if torch.cuda.is_available():
-            mask_similar_class.cuda()
-        if torch.cuda.is_available():
-            mask_anchor_out = (1 - torch.eye(exp_dot_tempered.shape[0]).cuda())
-        else:
-            mask_anchor_out = (1 - torch.eye(exp_dot_tempered.shape[0]))
-        mask_combined = mask_similar_class * mask_anchor_out
-        cardinality_per_batchs = torch.sum(mask_combined, dim=1)
-        log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered, dim=1, keepdim=True)))
-        supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_anchor_out, dim=1) / cardinality_per_batchs
-        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
-        return supervised_contrastive_loss
+
+    def forward(self, batch):
+        embedding = self.represent(batch)
+        embedding = F.normalize(embedding, p=2, dim=1)
+        logits = self.lc(embedding)  # [num_of_tokens, class_num]
+        _, pred = torch.max(logits, 1)
+        return logits, pred
     
     def _regulization(self):
         pass
