@@ -39,9 +39,10 @@ class SupervisedSetting:
         if not args.only_test:
             sup_episode.train(load_ckpt=args.load_ckpt, save_ckpt=ckpt)
         # test
-        precision, recall, f1, fp, fn, within, outer = sup_episode.eval(ckpt=ckpt)
-        logger.info('RESULT: precision: %.4f, recall: %.4f, f1: %.4f' % (precision, recall, f1))
-        logger.info('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f'%(fp, fn, within, outer))
+        if not args.only_train_decoder:
+            precision, recall, f1, fp, fn, within, outer = sup_episode.eval(ckpt=ckpt)
+            logger.info('RESULT: precision: %.4f, recall: %.4f, f1: %.4f' % (precision, recall, f1))
+            logger.info('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within: %.4f, outer: %.4f'%(fp, fn, within, outer))
 
 class CiSetting:
     def execute(self, args: TypedArgumentParser, ckpt=None):
