@@ -110,7 +110,7 @@ class SupNerEpisode:
                             batch[k] = batch[k].cuda()
                     label = label.cuda()
 
-                logits, pred = self.model(batch)
+                logits, pred = self.model.train_forward(batch)
                 assert logits.shape[0] == label.shape[0]
                 loss = self.model.loss(logits, label)
                 tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
@@ -124,12 +124,11 @@ class SupNerEpisode:
                 correct_cnt += correct
                 epoch_sample += 1
                 if (it + 1) % 100 == 0:
-                    # precision = correct_cnt / pred_cnt
-                    # recall = correct_cnt / label_cnt
-                    # f1 = 2 * precision * recall / (precision + recall)
-                    logger.info('[TRAIN] it: {0} | loss: {1:2.6f}'.format(it+1, epoch_loss / epoch_sample))
-                #      | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
-                # .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
+                    precision = correct_cnt / pred_cnt
+                    recall = correct_cnt / label_cnt
+                    f1 = 2 * precision * recall / (precision + recall)
+                    logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
+                .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
                 it += 1
             precision = correct_cnt / pred_cnt
             recall = correct_cnt / label_cnt
@@ -142,7 +141,7 @@ class SupNerEpisode:
                 self.model.train()
                 if f1 > best_f1:
                     logger.info('Best checkpoint')
-                    # torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
+                    torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
                     best_f1 = f1
                     best_count = 0
                 best_count += 1
@@ -253,6 +252,9 @@ class SupConNerEpisode(SupNerEpisode):
                         continue
                     own_state[name].copy_(param)
 
+            # experiment
+            self.model.freeze_encoder()
+
             self.model.train()
             epoch_loss = 0.
             epoch_sample = 0
@@ -274,7 +276,7 @@ class SupConNerEpisode(SupNerEpisode):
                                 batch[k] = batch[k].cuda()
                         label = label.cuda()
 
-                    embedding, pred = self.model.contrastive_forward(batch)
+                    embedding, pred = self.model.train_forward(batch)
                     loss = self.model.supcon_loss(embedding, label)
                     tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
                     optimizer.zero_grad()
@@ -298,9 +300,10 @@ class SupConNerEpisode(SupNerEpisode):
                             .format(epoch, epoch_loss / epoch_sample, precision, recall))
                 
                 if (epoch + 1) % self.args.val_step == 0:
-                    protos = self.get_all_protos(train_data_loader)
-                    self.model.global_protos = protos              
+                    proto_dict = self.get_all_protos(train_data_loader)
+                    self.model.update_global_protos(proto_dict)
                     p, _, _, _, _, _, _ = self.eval()
+                    self.model.reset_protos()
                     self.model.train()
                     if p > best_p:
                         logger.info('Best checkpoint')
@@ -319,12 +322,12 @@ class SupConNerEpisode(SupNerEpisode):
             torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
             logger.info('Finish contrastive training.')
         if not self.args.only_train_encoder:
-            self.model.word_encoder.requires_grad_(False)
+            self.model.freeze_encoder()
             self.train_dataset.set_augment(False)
             super().train(load_ckpt=save_ckpt, save_ckpt=save_ckpt)
 
     def get_all_protos(self, train_data_loader):
-        protos, embed_cnt = {}, {}
+        proto_dict, embed_cnt = {}, {}
         self.train_dataset.set_augment(False)
         with torch.no_grad():
             for _, batch in tqdm(enumerate(train_data_loader), desc='computing protos', total=len(self.train_dataset) // self.args.batch_size):
@@ -332,22 +335,22 @@ class SupConNerEpisode(SupNerEpisode):
                     for k in batch:
                         if k != 'label' and k != 'label2tag':
                             batch[k] = batch[k].cuda()
-                embedding = self.model.represent(batch)
+                embedding = self.model.encode(batch)
                 tag = batch['label']
                 tag = torch.cat(tag, 0)
                 tag_set = set([int(_) for _ in tag.tolist()])
                 tag_set.discard(self.model.ignore_index)
                 for label in tag_set:
-                    if label not in protos:
-                        protos[label] = torch.sum(embedding[tag == label], dim=0)
+                    if label not in proto_dict:
+                        proto_dict[label] = torch.sum(embedding[tag == label], dim=0)
                         embed_cnt[label] = embedding[tag == label].size(0)
                     else:
-                        protos[label] = torch.sum(torch.cat((protos[label].unsqueeze(0), embedding[tag == label]), dim=0),dim=0)
+                        proto_dict[label] = torch.sum(torch.cat((proto_dict[label].unsqueeze(0), embedding[tag == label]), dim=0),dim=0)
                         embed_cnt[label] += embedding[tag == label].size(0)
-        for key in protos:
-            protos[key] = protos[key] / embed_cnt[key]
+        for key in proto_dict:
+            proto_dict[key] = proto_dict[key] / embed_cnt[key]
         self.train_dataset.set_augment(True)
-        return protos
+        return proto_dict
 
 class ContinualNerEpisode(SupConNerEpisode):
     def __init__(self, args: TypedArgumentParser, result_dict: dict):

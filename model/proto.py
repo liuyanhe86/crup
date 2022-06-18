@@ -1,5 +1,6 @@
 import logging
 import torch
+torch.set_printoptions(profile='full')
 from torch import nn
 import torch.nn.functional as F
 
@@ -55,24 +56,60 @@ class ProtoNet(NERModel):
     
     def _get_global_protos(self):
         protos = []
-        for _ in self.global_protos:
-            protos.append(self.global_protos[_])
+        for label in self.global_protos:
+            protos.append(self.global_protos[label])
         protos = torch.stack(protos)
         return protos
 
+    def _update_protos(self, x):
+        self.word_encoder.requires_grad_(False)
+        Z_c = self.encode(x)
+        self.word_encoder.requires_grad_(True)
+        tag = torch.cat(x['label'], 0)
+        for i in range(torch.max(tag) + 1):
+            if i not in self.global_protos:
+                proto_i = torch.mean(Z_c[tag == i], dim=0)
+                if not torch.isnan(proto_i).any():
+                    self.global_protos[i] = proto_i
+                else:
+                    self.global_protos[i] = torch.zeros_like(proto_i)
+            else:
+                if self.global_protos[i].any():
+                    proto_i = self.global_protos[i]
+                    dist = torch.sqrt(torch.sum(torch.pow(self.Z_p - proto_i, 2), dim=1))
+                    dist_mu = torch.mean(dist)
+                    dist_variance = torch.mean(torch.pow(dist - dist_mu, 2))
+                    delta = Z_c - self.Z_p
+                    w = torch.exp(-torch.pow(dist, 2) / (2 * dist_variance))
+                    Delta = torch.sum(torch.unsqueeze(w, 1) * delta, dim=0) / torch.sum(w)
+                    self.global_protos[i] = proto_i + Delta
+                else:
+                    proto_i = torch.mean(Z_c[tag==i], dim=0)
+                    if not torch.isnan(proto_i).any():
+                        self.global_protos[i] = proto_i
 
-    def forward(self, batch):
-        batch_emb = self.word_encoder(batch['sentence'], batch['attention_mask'])
-        batch_emb = self.drop(batch_emb)  # [batch_size, max_len, 768]
-        # Prototypical Networks
-        
-        # Calculate prototype for each class
-        batch_emb = batch_emb[batch['text_mask']==1].view(-1, batch_emb.size(-1))
-        if 'label' in batch:
-            protos = self._get_local_protos(batch_emb, batch)
+    def train_forward(self, x):
+        if len(self.global_protos) == 0:
+            logger.info('init prototypes')
+            self._update_protos(x)
         else:
-            protos = self._get_global_protos()
+            logger.info('update prototypes')
+            self._update_protos(self.current_batch)
+        embedding = self.encode(x)
+        self.current_batch,self.Z_p = x, embedding
+        protos = self._get_global_protos()
         # calculate distance to each prototype
-        logits = self.__batch_dist__(protos, batch_emb)
+        logits = self.__batch_dist__(protos, embedding)
         _, pred = torch.max(logits, 1)  # [num_of_tokens]
+        logger.info(f'min pred: {torch.min(pred)}; max pred: {torch.max(pred)}; min labels: {torch.min(torch.cat(x["label"]))}; max labels: {torch.max(torch.cat(x["label"]))}')
+        return logits, pred
+    
+    def forward(self, x):
+        embedding = self.encode(x)
+        index2tag, protos = self._get_global_protos()
+        # calculate distance to each prototype
+        logits = self.__batch_dist__(protos, embedding)
+        _, pred = torch.max(logits, 1)  # [num_of_tokens]
+        for index in index2tag:
+            pred[pred == index] = index2tag[index]
         return logits, pred

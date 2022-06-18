@@ -14,6 +14,7 @@ class NERModel(nn.Module):
         nn.Module.__init__(self)
         self.ignore_index = ignore_index
         self.word_encoder = nn.DataParallel(my_word_encoder)
+        self.drop = nn.Dropout()
         self.cost = nn.CrossEntropyLoss(ignore_index=ignore_index)
 
     def get_parameters_to_optimize(self):
@@ -26,6 +27,12 @@ class NERModel(nn.Module):
                 if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
         return parameters_to_optimize
+
+    def encode(self, batch):
+        embedding = self.word_encoder(batch['sentence'], batch['attention_mask'])
+        embedding = self.drop(embedding)  # [batch_size, max_len, 768]
+        embedding = embedding[batch['text_mask']==1]
+        return embedding    
     
     def forward(self, x):
         '''
@@ -34,7 +41,7 @@ class NERModel(nn.Module):
         '''
         raise NotImplementedError
     
-    def contrastive_forward(self, x):
+    def train_forward(self, x):
         '''
         x: sentence
         return: embedding
@@ -80,8 +87,8 @@ class NERModel(nn.Module):
         assert pred.shape[0] == label.shape[0]
         return pred, label
 
-    def represent(self):
-        raise NotImplementedError
+    def freeze_encoder(self):
+        self.word_encoder.requires_grad_(False)
 
     def accuracy(self, pred, label):
         '''
