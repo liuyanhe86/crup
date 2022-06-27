@@ -28,7 +28,7 @@ class NERModel(nn.Module):
         ]
         return parameters_to_optimize
 
-    def encode(self, batch):
+    def encode(self, batch) -> torch.Tensor:
         embedding = self.word_encoder(batch['sentence'], batch['attention_mask'])
         embedding = self.drop(embedding)  # [batch_size, max_len, 768]
         embedding = embedding[batch['text_mask']==1]

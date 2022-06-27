@@ -1,4 +1,3 @@
-import argparse
 import datetime
 import logging
 import os
@@ -47,14 +46,14 @@ def main():
     set_seed(args.random_seed)
     if not os.path.exists('log'):
         os.mkdir('log')
-    init_logging(f'log/{args.setting}_{args.dataset}_{args.model}{"_dot" if args.dot else ""}.log')   
+    init_logging(f'log/{args.setting}_{args.dataset}_{args.model}{"_" + args.proto_update if args.model == "ProtoNet" else ""}{"_" + args.metric if args.model == "ProtoNet" else ""}.log')   
     logger = logging.getLogger(__name__)
     logger.info(f'PID: {os.getpid()}; PPID: {os.getppid()}')
 
     logger.info(f'EXP CONFIG: {args}')
     if not os.path.exists('checkpoint'):
         os.mkdir('checkpoint')
-    ckpt = f'checkpoint/{args.setting}_{args.dataset}_{args.model}{"_dot" if args.dot else ""}.pth.tar'
+    ckpt = f'checkpoint/{args.setting}_{args.dataset}_{args.model}{"_" + args.proto_update if args.model == "ProtoNet" else ""}{"_" + args.metric if args.model == "ProtoNet" else ""}.pth.tar'
     logger.info(f'model-save-path: {ckpt}')
 
     if args.setting == 'sup':

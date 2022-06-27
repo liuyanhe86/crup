@@ -1,7 +1,6 @@
 import logging
-from turtle import forward
 import torch
-from torch import embedding, nn
+from torch import nn
 import torch.nn.functional as F
 
 from model import NERModel
@@ -10,11 +9,7 @@ logger = logging.getLogger(__name__)
 
 class PCP(NERModel):
     
-    def __init__(self, 
-                word_encoder, 
-                setting='CI', 
-                temperature=0.5,
-                dot=False):
+    def __init__(self, word_encoder, temperature=0.1, metric='dot'):
         NERModel.__init__(self, word_encoder)
         self.drop = nn.Dropout()
         self.proj_head = nn.Sequential(
@@ -26,15 +21,16 @@ class PCP(NERModel):
         self.global_protos = {}
         self.index2label = None
         self.protos = None
-        self.setting = setting
         self.temperature = temperature
-        self.dot = dot
-    
+        self.metric = metric
+
     def __dist__(self, x, y, dim):
-        if self.dot:
+        if self.metric == 'dot':
             return (x * y).sum(dim)
-        else:
+        elif self.metric == 'L2':
             return -(torch.pow(x - y, 2)).sum(dim)
+        else:
+            raise NotImplementedError(f'ERROR: Invalid metric - {self.metric}')
 
     def _batch_dist(self, protos, embeddings):
         return self.__dist__(protos.unsqueeze(0), embeddings.unsqueeze(1), 2)
