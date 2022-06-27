@@ -2,7 +2,7 @@ import logging
 import os
 
 import torch
-from torch import embedding, nn
+from torch import nn
 from tqdm import tqdm
 from torch.optim import AdamW, SGD
 
@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 def get_model(args: TypedArgumentParser):
     word_encoder = BERTWordEncoder(args.pretrain_ckpt)
     if args.model == 'ProtoNet':
-        model = ProtoNet(word_encoder, dot=args.dot)
+        model = ProtoNet(word_encoder, proto_update=args.proto_update, metric=args.metric)
     elif args.model == 'Bert-Tagger':
         model = BertTagger(word_encoder)
     elif args.model == 'PCP':
-        model = PCP(word_encoder, temperature=args.temperature, dot=args.dot)
+        model = PCP(word_encoder, temperature=args.temperature, metric=args.metric)
     else:
         raise NotImplementedError(f'Error: Model {args.model} not implemented!')
     if torch.cuda.is_available():
@@ -74,7 +74,7 @@ class SupNerEpisode:
         # Init optimizer
         parameters_to_optimize = self.model.get_parameters_to_optimize()
         logger.info('Optimizer: SGD')
-        if not self.args.only_train_decoder:
+        if self.args.only_train_decoder:
             optimizer = SGD(parameters_to_optimize, lr=self.args.decoder_lr)
         else:
             optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
@@ -100,7 +100,7 @@ class SupNerEpisode:
         epoch = 0
         best_count = 0
         train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8)
-        while epoch + 1 < self.args.train_epoch and best_count < 3:
+        while epoch < self.args.train_epoch and best_count <= 3:
             it = 0
             for _, batch in tqdm(enumerate(train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
                 label = torch.cat(batch['label'], 0)
@@ -123,10 +123,10 @@ class SupNerEpisode:
                 label_cnt += tmp_label_cnt
                 correct_cnt += correct
                 epoch_sample += 1
-                if (it + 1) % 100 == 0:
+                if (it + 1) % 500 == 0:
                     precision = correct_cnt / pred_cnt
                     recall = correct_cnt / label_cnt
-                    f1 = 2 * precision * recall / (precision + recall)
+                    f1 = 2 * precision * recall / (precision + recall) if precision + recall != 0 else float('inf')
                     logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
                 .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
                 it += 1
@@ -220,9 +220,7 @@ class SupNerEpisode:
         fn_error = fn_cnt / total_token_cnt
         within_error = within_cnt / total_span_cnt
         outer_error = outer_cnt / total_span_cnt
-        if is_test:
-            logger.info('[TEST] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
-        else:
+        if not is_test:
             logger.info('[VAL] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
         return precision, recall, f1, fp_error, fn_error, within_error, outer_error    
 

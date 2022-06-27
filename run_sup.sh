@@ -1,7 +1,7 @@
 export CUDA_VISIBLE_DEVICES=1
 
 # python main.py \
-#         --dataset few-nerd \
+#         --dataset stackoverflow \
 #         --setting sup \
 #         --model Bert-Tagger \
 #         --lr 5e-3 \
@@ -9,11 +9,12 @@ export CUDA_VISIBLE_DEVICES=1
 #         --train_encoder
 
 python main.py \
-        --dataset few-nerd \
+        --dataset coarse-few-nerd \
         --setting sup \
         --model ProtoNet \
+        --proto_update SDC \
         --lr 2e-5 \
-        --dot
+        --metric L2
 
 # python main.py \
 #         --dataset few-nerd \

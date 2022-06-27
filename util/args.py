@@ -1,7 +1,7 @@
 from tap import Tap
 
 class TypedArgumentParser(Tap):
-    dataset: str = 'few-nerd'  # dataset name
+    dataset: str = 'coarse-few-nerd'  # dataset name
     setting: str = 'sup'  # continual learning setting, must be in [sup, CI, online, multi-task]
     model: str = 'Bert-Tagger'  # model name, must be in [PCP, ProtoNet, BERT-Tagger]
     batch_size: int=32  # batch size
@@ -19,11 +19,12 @@ class TypedArgumentParser(Tap):
     only_test: bool=False  # only test model with checkpoint
     start_task: int=0  # continual task id of beginning task
     pretrain_ckpt: str='bert-base-uncased'  # bert / roberta pre-trained checkpoint
-    dot: bool=False  # use dot instead of L2 distance for proto
+    metric: str='dot'  # metric used to compute distance between embedding and prototypes, must in ['dot', 'L2']
     temperature: float=0.1  # temperature for supervised contrastive loss
     use_sgd: bool=False  # use SGD instead of AdamW for BERT
     only_train_encoder: bool=False  # only train encoder
     only_train_decoder: bool=False  # only train decoder with fixed encoder parameters
+    proto_update: str='SDC'  # the way of updating prototypes, only for prototype-based models, must in ['replace', 'mean', 'SDC']
     
     def __str__(self):
         return '; '.join([f'{name}: {self.__getattribute__(name)}' for name in self._get_argument_names()])

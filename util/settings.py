@@ -10,27 +10,15 @@ from util.tasks import PROTOCOLS
 
 logger = logging.getLogger(__name__)
 
-def get_dataset_path(dataset):
-    if dataset == 'few-nerd':
-        return 'data/few-nerd'
-    elif dataset == 'coarse-few-nerd':
-        return 'data/few-nerd/coarse'
-    elif dataset == 'fine-few-nerd':
-        return 'data/few-nerd/fine'
-    elif dataset == 'stackoverflow':
-        return 'data/stackoverflow'
-    else:
-        raise ValueError(f'Unknown dataset {dataset}!')
-
 class SupervisedSetting:
 
     def execute(self, args:TypedArgumentParser, ckpt=None):
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
-        dataset_path = get_dataset_path(args.dataset)
         logger.info('loading data...')
-        train_dataset = NerDataset(os.path.join(dataset_path, 'supervised/train.txt'), tokenizer, max_length=args.max_length)
-        val_dataset = NerDataset(os.path.join(dataset_path, 'supervised/dev.txt'), tokenizer, max_length=args.max_length)
-        test_dataset = NerDataset(os.path.join(dataset_path, 'supervised/test.txt'), tokenizer, max_length=args.max_length)
+        supervised_task = PROTOCOLS[args.setting + ' ' + args.dataset]
+        train_dataset = NerDataset(os.path.join(supervised_task, 'train.txt'), tokenizer, max_length=args.max_length)
+        val_dataset = NerDataset(os.path.join(supervised_task, 'dev.txt'), tokenizer, max_length=args.max_length)
+        test_dataset = NerDataset(os.path.join(supervised_task, 'test.txt'), tokenizer, max_length=args.max_length)
         logger.info(f'train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
         if args.augment:
             sup_episode = SupConNerEpisode(args, train_dataset, val_dataset, test_dataset)
@@ -51,13 +39,12 @@ class CiSetting:
         task_id = 0
         label_offset = 0
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
-        dataset_path = get_dataset_path(args.dataset)
         result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in ci_tasks}
         continual_episode = ContinualNerEpisode(args, result_dict)
         for task in ci_tasks:
-            train_dataset = ContinualNerDataset(os.path.join(dataset_path, ci_tasks[task], 'train.txt'), tokenizer, augment=args.augment, label_offset=label_offset, max_length=args.max_length)
-            val_dataset = ContinualNerDataset(os.path.join(dataset_path, ci_tasks[task], 'dev.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
-            test_dataset = ContinualNerDataset(os.path.join(dataset_path,  ci_tasks[task], 'test.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
+            train_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'train.txt'), tokenizer, augment=args.augment, label_offset=label_offset, max_length=args.max_length)
+            val_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'dev.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
+            test_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'test.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
             logger.info(f'[TASK {task}] train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
             label_offset += len(train_dataset.classes)
             continual_episode.append_task(task, train_dataset, val_dataset, test_dataset)
@@ -81,13 +68,12 @@ class OnlineSetting:
         logger.info('loading data...')
         online_tasks = PROTOCOLS[args.setting + ' ' + args.dataset]
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
-        dataset_path = get_dataset_path(args.dataset)
         online_dataset = MultiNerDataset(tokenizer=tokenizer, augment=args.augment, max_length=args.max_length)
         label_offset = 0
         splits = {'train.txt', 'dev.txt', 'test.txt'}
         for task in online_tasks:
             for split in splits:
-                file_path = os.path.join(dataset_path,  online_tasks[task], split)
+                file_path = os.path.join(online_tasks[task], split)
                 offset = online_dataset.append(file_path=file_path, label_offset=label_offset)
                 label_offset += offset
         logger.info(f'online dataset size: {len(online_dataset)}')
@@ -101,15 +87,14 @@ class MultiTaskSetting:
         multi_task_pathes = PROTOCOLS[args.setting + ' ' + args.dataset]
         label_offset = 0
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
-        dataset_path = get_dataset_path(args.dataset)
         train_dataset = MultiNerDataset(tokenizer, max_length=args.max_length)  
         task_id = 0
         result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in multi_task_pathes}
         continual_episode = ContinualNerEpisode(args, result_dict)
         for task in multi_task_pathes:
-            label_set_size = train_dataset.append(os.path.join(dataset_path, multi_task_pathes[task], 'train.txt'), label_offset)
-            val_dataset = ContinualNerDataset(os.path.join(dataset_path, multi_task_pathes[task], 'dev.txt'), label_offset)
-            test_dataset = ContinualNerDataset(os.path.join(dataset_path, multi_task_pathes[task], 'test.txt'), label_offset)
+            label_set_size = train_dataset.append(os.path.join(multi_task_pathes[task], 'train.txt'), label_offset)
+            val_dataset = ContinualNerDataset(os.path.join(multi_task_pathes[task], 'dev.txt'), label_offset)
+            test_dataset = ContinualNerDataset(os.path.join(multi_task_pathes[task], 'test.txt'), label_offset)
             logger.info(f'[TASK {task}] train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
             continual_episode.append_task(task, train_dataset, val_dataset, test_dataset)
             if not args.only_test:
