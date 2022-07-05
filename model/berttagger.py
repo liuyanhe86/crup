@@ -1,7 +1,7 @@
 import logging
 
 import torch
-from torch import embedding_bag, nn
+from torch import nn
 
 from model import NERModel
 

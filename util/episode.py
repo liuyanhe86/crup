@@ -19,7 +19,7 @@ def get_model(args: TypedArgumentParser):
     elif args.model == 'Bert-Tagger':
         model = BertTagger(word_encoder)
     elif args.model == 'PCP':
-        model = PCP(word_encoder, temperature=args.temperature, metric=args.metric)
+        model = PCP(word_encoder, embedding_dimension=args.embedding_dimension, temperature=args.temperature, metric=args.metric)
     else:
         raise NotImplementedError(f'Error: Model {args.model} not implemented!')
     if torch.cuda.is_available():
@@ -37,11 +37,16 @@ class SupNerEpisode:
         self.test_dataset = test_dataset
 
     def initialize_model(self):
-        lc = nn.Linear(in_features=self.embedding_dim, out_features=len(self.train_dataset.get_label_set()))
-        if torch.cuda.is_available():
-            self.model.add_module('lc', lc.cuda())
-        else:
-            self.model.add_module('lc', lc)
+        if self.args.model == 'Bert-Tagger':
+            lc = nn.Linear(in_features=self.embedding_dim, out_features=len(self.train_dataset.get_label_set()))
+            if torch.cuda.is_available():
+                self.model.add_module('lc', lc.cuda())
+            else:
+                self.model.add_module('lc', lc)
+        elif self.args.model == 'ProtoNet':
+            if self.args.proto_update == 'SDC':
+                self.model.start_training()
+
     
     def __load_model__(self, ckpt):
         '''
@@ -251,20 +256,20 @@ class SupConNerEpisode(SupNerEpisode):
                     own_state[name].copy_(param)
 
             # experiment
-            self.model.freeze_encoder()
+            # self.model.freeze_encoder()
 
             self.model.train()
             epoch_loss = 0.
             epoch_sample = 0
             epoch = 0
             best_count = 0
-            best_p = 0.0
+            best_f1 = 0.0
             pred_cnt = 0
             label_cnt = 0
             correct_cnt = 0
-            self.train_dataset.set_augment(True)
+            self.train_dataset.set_augment(self.args.augment)
             train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8)
-            while epoch + 1 < self.args.train_epoch and best_count < 3:
+            while epoch < self.args.train_epoch and best_count <= 3:
                 it = 0
                 for _, batch in tqdm(enumerate(train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
                     label = torch.cat(batch['label'], 0)
@@ -289,24 +294,26 @@ class SupConNerEpisode(SupNerEpisode):
                     if (it + 1) % 100 == 0:
                         precision = correct_cnt / pred_cnt
                         recall = correct_cnt / label_cnt
-                        logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | precision: {2:2.6f}, recall: {3:2.6f}'
-                                    .format(it + 1, epoch_loss / epoch_sample, precision, recall))
+                        f1 = 2 * precision * recall / (precision + recall) if precision + recall != 0 else float('inf')
+                        logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | precision: {2:2.6f}, recall: {3:2.6f}, f1: {4:2.6f}'
+                                    .format(it + 1, epoch_loss / epoch_sample, precision, recall, f1))
                     it += 1
                 precision = correct_cnt / pred_cnt
                 recall = correct_cnt / label_cnt
-                logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f} | p: {2:2.6f}, r: {3:2.6f}'
-                            .format(epoch, epoch_loss / epoch_sample, precision, recall))
+                f1 = 2 * precision * recall / (precision + recall) if precision + recall != 0 else float('inf')
+                logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f} | precision: {2:2.6f}, recall: {3:2.6f}, f1: {4:2.6f}'
+                            .format(epoch, epoch_loss / epoch_sample, precision, recall, f1))
                 
                 if (epoch + 1) % self.args.val_step == 0:
-                    proto_dict = self.get_all_protos(train_data_loader)
-                    self.model.update_global_protos(proto_dict)
-                    p, _, _, _, _, _, _ = self.eval()
-                    self.model.reset_protos()
+                    # proto_dict = self.get_all_protos(train_data_loader)
+                    # self.model.update_global_protos(proto_dict)
+                    _, _, f1, _, _, _, _ = self.eval()
+                    # self.model.reset_protos()
                     self.model.train()
-                    if p > best_p:
+                    if f1 > best_f1:
                         logger.info('Best checkpoint')
                         torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
-                        best_p = p
+                        best_f1 = f1
                         best_count = 0
                     best_count += 1
                 epoch_loss = 0.
@@ -321,12 +328,12 @@ class SupConNerEpisode(SupNerEpisode):
             logger.info('Finish contrastive training.')
         if not self.args.only_train_encoder:
             self.model.freeze_encoder()
-            self.train_dataset.set_augment(False)
+            self.train_dataset.set_augment(None)
             super().train(load_ckpt=save_ckpt, save_ckpt=save_ckpt)
 
     def get_all_protos(self, train_data_loader):
         proto_dict, embed_cnt = {}, {}
-        self.train_dataset.set_augment(False)
+        self.train_dataset.set_augment(None)
         with torch.no_grad():
             for _, batch in tqdm(enumerate(train_data_loader), desc='computing protos', total=len(self.train_dataset) // self.args.batch_size):
                 if torch.cuda.is_available():
@@ -347,12 +354,12 @@ class SupConNerEpisode(SupNerEpisode):
                         embed_cnt[label] += embedding[tag == label].size(0)
         for key in proto_dict:
             proto_dict[key] = proto_dict[key] / embed_cnt[key]
-        self.train_dataset.set_augment(True)
+        self.train_dataset.set_augment(self.args.augment)
         return proto_dict
 
-class ContinualNerEpisode(SupConNerEpisode):
+class ContinualNerEpisode(SupNerEpisode):
     def __init__(self, args: TypedArgumentParser, result_dict: dict):
-        SupConNerEpisode.__init__(self, args)
+        SupNerEpisode.__init__(self, args)
         self.test_datasets = {}
         self.result_dict = result_dict
     
@@ -361,6 +368,10 @@ class ContinualNerEpisode(SupConNerEpisode):
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.test_datasets[task] = test_dataset
+
+    def finish_task(self):
+        if self.args.model == 'ProtoNet':
+            logger.info(f'current prototypes: {self.model.global_protos}')
 
     def eval(self, ckpt=None): 
         logger.info('Start evaluating...')

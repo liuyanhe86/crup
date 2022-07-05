@@ -1,6 +1,5 @@
 import logging
 import torch
-torch.set_printoptions(profile='full')
 from torch import nn
 
 from model import NERModel
@@ -29,12 +28,12 @@ class ProtoNet(NERModel):
     
     def _replace_or_mean(self, x):
         self.word_encoder.requires_grad_(False)
-        embedding = self.encode(x)
+        rep = self.encode(x)
         self.word_encoder.requires_grad_(True)
         tag = torch.cat(x['label'], 0)
-        assert tag.size(0) == embedding.size(0)
+        assert tag.size(0) == rep.size(0)
         for label in range(torch.max(tag) + 1):
-            mean = torch.mean(embedding[tag==label], dim=0)
+            mean = torch.mean(rep[tag==label], dim=0)
             if label not in self.global_protos:
                 if not torch.isnan(mean).any():
                     self.global_protos[label] = mean
@@ -48,8 +47,8 @@ class ProtoNet(NERModel):
                     else:
                         new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
                     self.global_protos[label] = new_proto
-        embedding = self.encode(x)
-        return embedding
+        rep = self.encode(x)
+        return rep
 
     def _semantic_drift_compensation(self, x):
         self.word_encoder.requires_grad_(False)
@@ -79,36 +78,48 @@ class ProtoNet(NERModel):
                         self.global_protos[i] = proto_i
         
     def _get_global_protos(self):
-        protos = []
+        index2label, protos = {}, []
+        index = 0
         for label in self.global_protos:
             protos.append(self.global_protos[label])
+            index2label[label] = index
+            index += 1
         protos = torch.stack(protos)
-        return protos
+        return index2label, protos
+
+    def start_training(self):
+        self.first_batch = True
 
     def train_forward(self, x):
         if self.proto_update == 'replace' or self.proto_update == 'mean':
-            embedding = self._replace_or_mean(x)
+            rep = self._replace_or_mean(x)
         elif self.proto_update == 'SDC':
-            if len(self.global_protos) == 0:  # initialize
+            if self.first_batch:  # initialize
                 self._semantic_drift_compensation(x)
+                self.first_batch = False
             else:
                 self._semantic_drift_compensation(self.current_batch)
-            embedding = self.encode(x)
-            self.current_batch, self.Z_p = x, embedding.clone()
+            rep = self.encode(x)
+            self.current_batch, self.Z_p = x, rep.clone()
             self.Z_p.detach_()
         else:
             raise NotImplementedError(f'ERROR: Invalid prototype update - {self.proto_update}')
             
-        protos = self._get_global_protos()
-        # calculate distance to each prototype
-        logits = self.__batch_dist__(protos, embedding)
-        _, pred = torch.max(logits, 1)  # [num_of_tokens]
+        index2label, protos = self._get_global_protos()
+        logits = self.__batch_dist__(protos, rep)  # [num_of_tokens, class_num]
+        _, pred = torch.max(logits, 1)
+        for index in index2label:
+            pred[pred == index] = index2label[index]
         return logits, pred
     
     def forward(self, x):
-        embedding = self.encode(x)
-        protos = self._get_global_protos()
-        # calculate distance to each prototype
-        logits = self.__batch_dist__(protos, embedding)
-        _, pred = torch.max(logits, 1)  # [num_of_tokens]
+        rep = self.encode(x)
+        index2label, protos = self._get_global_protos()
+        logits = self.__batch_dist__(protos, rep)  # [num_of_tokens, class_num]
+        _, pred = torch.max(logits, 1)
+        for index in index2label:
+            pred[pred == index] = index2label[index]
         return logits, pred
+
+    def finish_task(self):
+        logger.info(f'current prototypes: {self.global_protos}')
