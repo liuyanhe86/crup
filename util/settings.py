@@ -4,7 +4,7 @@ import os
 
 from transformers import BertTokenizer
 from util.args import TypedArgumentParser
-from util.datautils import ContinualNerDataset, MultiNerDataset, NerDataset
+from util.datautils import ContinualNerDataset, MultiNerDataset, NerDataset, get_loader
 from util.episode import ContinualNerEpisode, OnlineNerEpisode, SupConNerEpisode, SupNerEpisode
 from util.tasks import PROTOCOLS
 
@@ -37,22 +37,31 @@ class CiSetting:
         logger.info('loading data...')
         ci_tasks = PROTOCOLS[args.setting + ' ' + args.dataset]
         task_id = 0
-        label_offset = 0
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
         result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in ci_tasks}
+        label2tag, tag2label = {0:'O'}, {'O':0}
         continual_episode = ContinualNerEpisode(args, result_dict)
         for task in ci_tasks:
-            train_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'train.txt'), tokenizer, augment=args.augment, label_offset=label_offset, max_length=args.max_length)
-            val_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'dev.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
-            test_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'test.txt'), tokenizer, label_offset=label_offset, max_length=args.max_length)
+            train_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'train.txt'), tokenizer, augment=args.augment, max_length=args.max_length)
+            val_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'dev.txt'), tokenizer, max_length=args.max_length)
+            test_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'test.txt'), tokenizer, max_length=args.max_length)
+            num_of_existing_labels = len(label2tag)
+            for idx, tag in enumerate(list(train_dataset.classes)):
+                label2tag[idx + num_of_existing_labels] = tag
+            for idx, tag in enumerate(list(train_dataset.classes)):
+                tag2label[tag] = idx + num_of_existing_labels
+            train_dataset.set_labelmap(label2tag, tag2label)
+            val_dataset.set_labelmap(label2tag, tag2label)
+            test_dataset.set_labelmap(label2tag, tag2label)
             logger.info(f'[TASK {task}] train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
-            label_offset += len(train_dataset.classes)
             continual_episode.append_task(task, train_dataset, val_dataset, test_dataset)
+            
             if not args.only_test and task_id >= args.start_task:
                 load_ckpt = None
                 if task_id > 0:
                     load_ckpt = ckpt
                 continual_episode.train(load_ckpt=load_ckpt, save_ckpt=ckpt)
+                continual_episode.finish_task()
                 # normal test
                 continual_episode.eval(ckpt=ckpt)
             else:
@@ -119,13 +128,13 @@ def output_continual_results(args: TypedArgumentParser, result_dict):
         os.mkdir(output_dir)
     with open(os.path.join(output_dir, 'precision'), 'a') as file:
         file.write(str(datetime.datetime.now()) + '\n')
-        file.write(f'learning rate: {args.lr}; use cp loss: {args.contrast_proto}; use proj: {args.use_proj}; use dot: {args.dot};')
+        file.write(f'learning rate: {args.lr}; prototype update: {args.proto_update}; use augment: {args.augment}; metric: {args.metric};')
         for task in result_dict:
             task_precision = ','.join([str(_) for _ in result_dict[task]['precision']])
             file.write(task_precision + '\n')
     with open(os.path.join(output_dir, 'f1'), 'a') as file:
         file.write(str(datetime.datetime.now()) + '\n')
-        file.write(f'learning rate: {args.lr}; use cp loss: {args.contrast_proto}; use proj: {args.use_proj}; use dot: {args.dot};')
+        file.write(f'learning rate: {args.lr}; prototype update: {args.proto_update}; use augment: {args.augment}; metric: {args.metric};')
         for task in result_dict:
             task_f1 = ','.join([str(_) for _ in result_dict[task]['f1']])
             file.write(task_f1 + '\n')

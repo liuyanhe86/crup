@@ -148,7 +148,7 @@ class NerDataset(Dataset):
             logger.error(f"data file {file_path} does not exist!")
             assert(0)
         self.tokenizer = tokenizer
-        self.augment = False
+        self.augment = None
         self.samples, self.classes = self.__load_data_from_file__(file_path)
         # add 'O' and make sure 'O' is labeled 0
         distinct_tags = ['O'] + list(self.classes)
@@ -271,10 +271,13 @@ class NerDataset(Dataset):
             data_item['label'] += label
         add_item(self.samples[idx])
         if self.augment:
-            permutation_view = self.samples[idx].permutation_augment()
-            # remove_view = self.samples[idx].remove_augment()
-            add_item(permutation_view)
-            # add_item(remove_view)
+            if self.augment == 'remove':
+                view = self.samples[idx].remove_augment()
+            elif self.augment == 'permute':
+                view = self.samples[idx].permutation_augment()
+            else:
+                raise NotImplementedError('ERROR: Invalid augmentation - {self.augment}')
+            add_item(view)
         data_item['label2tag'] = self.label2tag
         return data_item
 
@@ -295,19 +298,20 @@ class ContinualNerDataset(NerDataset):
     """
     Continual NER Dataset
     """
-    def __init__(self, file_path: str, tokenizer, augment=False, max_length:int=10, label_offset:int=0, ignore_label_id:int=-1):
+    def __init__(self, file_path: str, tokenizer, augment=False, max_length:int=10, ignore_label_id:int=-1):
         if not os.path.exists(file_path):
             logger.error(f"[ERROR] Data file {file_path} does not exist!")
             assert(0)
         self.tokenizer = tokenizer
         self.augment = augment
         self.samples, self.classes = self.__load_data_from_file__(file_path)
-        self.tag2label = {tag:idx + label_offset + 1 for idx, tag in enumerate(list(self.classes))}
-        self.tag2label['O'] = 0
-        self.label2tag = {idx + label_offset + 1:tag for idx, tag in enumerate(list(self.classes))}
-        self.label2tag[0] = 'O'
         self.max_length = max_length
         self.ignore_label_id = ignore_label_id
+
+    def set_labelmap(self, label2tag, tag2label):
+        self.label2tag = label2tag
+        self.tag2label = tag2label
+
     
 class MultiNerDataset(NerDataset):
     """

@@ -6,11 +6,15 @@ export CUDA_VISIBLE_DEVICES=2
 #         --model PCP \
 #         --dot \
 #         --only_test
+
 python main.py \
         --dataset  coarse-few-nerd \
         --setting CI \
         --model ProtoNet \
-        --dot
+        --lr 5e-3 \
+        --proto_update mean \
+        --metric dot
+
 # python main.py \
 #         --dataset stackoverflow \
 #         --setting CI \ 
