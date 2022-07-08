@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 class ProtoNet(NERModel):
     
-    def __init__(self, word_encoder, proto_update='SDC', metric='dot'):
-        NERModel.__init__(self, word_encoder)
+    def __init__(self, word_encoder, proto_update='SDC', metric='dot', ignore_index=-1):
+        NERModel.__init__(self, word_encoder, ignore_index)
         self.drop = nn.Dropout()
         self.proto_update = proto_update
         self.metric = metric

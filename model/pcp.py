@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 class PCP(NERModel):
     
-    def __init__(self, word_encoder, embedding_dimension=64, temperature=0.1, metric='dot'):
-        NERModel.__init__(self, word_encoder)
+    def __init__(self, word_encoder, embedding_dimension=64, temperature=0.1, metric='dot', ignore_index=-1):
+        NERModel.__init__(self, word_encoder, ignore_index)
         self.drop = nn.Dropout()
         self.embedding_dimension = embedding_dimension
         

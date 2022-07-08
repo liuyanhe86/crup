@@ -2,24 +2,26 @@ import logging
 import os
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from tqdm import tqdm
 from torch.optim import AdamW, SGD
 
-from .args import TypedArgumentParser
-from .datautils import get_loader, NerDataset
+from util.args import TypedArgumentParser
+from util.datasets import get_loader
+from util.evaluator import Evaluater
 from model import BERTWordEncoder, BertTagger, PCP, ProtoNet
 
 logger = logging.getLogger(__name__)
 
 def get_model(args: TypedArgumentParser):
-    word_encoder = BERTWordEncoder(args.pretrain_ckpt)
+    word_encoder = BERTWordEncoder(pretrain_path=args.pretrain_ckpt)
     if args.model == 'ProtoNet':
         model = ProtoNet(word_encoder, proto_update=args.proto_update, metric=args.metric)
     elif args.model == 'Bert-Tagger':
         model = BertTagger(word_encoder)
     elif args.model == 'PCP':
-        model = PCP(word_encoder, embedding_dimension=args.embedding_dimension, temperature=args.temperature, metric=args.metric)
+        model = PCP(word_encoder, embedding_dimension=args.embedding_dimension, temperature=args.temperature)
     else:
         raise NotImplementedError(f'Error: Model {args.model} not implemented!')
     if torch.cuda.is_available():
@@ -28,13 +30,14 @@ def get_model(args: TypedArgumentParser):
 
 class SupNerEpisode:
 
-    def __init__(self, args: TypedArgumentParser, train_dataset:NerDataset=None, val_dataset:NerDataset=None, test_dataset:NerDataset=None):
+    def __init__(self, args: TypedArgumentParser, train_dataset=None, val_dataset=None, test_dataset=None):
         self.args = args
         self.model = get_model(args)
         self.embedding_dim = 768
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.test_dataset = test_dataset
+        self.evaluator = Evaluater(ignore_index=args.ignore_index)
 
     def initialize_model(self):
         if self.args.model == 'Bert-Tagger':
@@ -70,19 +73,24 @@ class SupNerEpisode:
         else:
             return x.item()
 
-    def train(self, load_ckpt=None, save_ckpt=None):
-        if self.args.only_train_decoder:
-            logger.info('Start classifier training...')
+    def loss(self, batch, label):
+        if self.args.augment:
+            (mu, sigma), pred = self.model.train_forward(batch)
+            pass
         else:
-            logger.info('Start joint training...')
+            logits, pred = self.model.train_forward(batch)
+            assert logits.shape[0] == label.shape[0]
+            N = logits.size(-1)
+            cost = nn.CrossEntropyLoss(ignore_index=self.args.ignore_index)
+            return pred, cost(logits.view(-1, N), label.view(-1))
+
+    def train(self, load_ckpt=None, save_ckpt=None):
+        logger.info('Start training ...')
         self.initialize_model()
         # Init optimizer
         parameters_to_optimize = self.model.get_parameters_to_optimize()
         logger.info('Optimizer: SGD')
-        if self.args.only_train_decoder:
-            optimizer = SGD(parameters_to_optimize, lr=self.args.decoder_lr)
-        else:
-            optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
+        optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
         
         if load_ckpt:
             state_dict = self.__load_model__(load_ckpt)['state_dict']
@@ -115,10 +123,8 @@ class SupNerEpisode:
                             batch[k] = batch[k].cuda()
                     label = label.cuda()
 
-                logits, pred = self.model.train_forward(batch)
-                assert logits.shape[0] == label.shape[0]
-                loss = self.model.loss(logits, label)
-                tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
+                pred, loss = self.loss(batch, label)
+                tmp_pred_cnt, tmp_label_cnt, correct = self.evaluator.metrics_by_entity(pred, label)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -205,8 +211,8 @@ class SupNerEpisode:
                 batch.pop('label')
                 _, pred = self.model(batch)
 
-                tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
-                fp, fn, token_cnt, within, outer, total_span = self.model.error_analysis(pred, label, batch['label2tag'])
+                tmp_pred_cnt, tmp_label_cnt, correct = self.evaluator.metrics_by_entity(pred, label)
+                fp, fn, token_cnt, within, outer, total_span = self.evaluator.error_analysis(pred, label, batch['label2tag'])
                 pred_cnt += tmp_pred_cnt
                 label_cnt += tmp_label_cnt
                 correct_cnt += correct
@@ -229,141 +235,13 @@ class SupNerEpisode:
             logger.info('[VAL] | [ENTITY] precision: {0:3.4f}, recall: {1:3.4f}, f1: {2:3.4f}'.format(precision, recall, f1) + '\r')
         return precision, recall, f1, fp_error, fn_error, within_error, outer_error    
 
-class SupConNerEpisode(SupNerEpisode):
-    
-    def __init__(self, args: TypedArgumentParser, train_dataset: NerDataset = None, val_dataset: NerDataset = None, test_dataset: NerDataset = None):
-        SupNerEpisode.__init__(self, args, train_dataset, val_dataset, test_dataset)
-
-    def train(self, load_ckpt=None, save_ckpt=None):
-        if not self.args.only_train_decoder:
-            logger.info('Start embedding training...')
-            # Init optimizer
-            parameters_to_optimize = self.model.get_parameters_to_optimize()
-            if self.args.use_sgd:
-                logger.info('Optimizer: SGD')
-                optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
-            else:
-                logger.info('Optimizer: AdamW')
-                optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
-            # load model
-            if load_ckpt:
-                state_dict = self.__load_model__(load_ckpt)['state_dict']
-                own_state = super().model.state_dict()
-                for name, param in state_dict.items():
-                    if name not in own_state:
-                        logger.info('ignore {}'.format(name))
-                        continue
-                    own_state[name].copy_(param)
-
-            # experiment
-            # self.model.freeze_encoder()
-
-            self.model.train()
-            epoch_loss = 0.
-            epoch_sample = 0
-            epoch = 0
-            best_count = 0
-            best_f1 = 0.0
-            pred_cnt = 0
-            label_cnt = 0
-            correct_cnt = 0
-            self.train_dataset.set_augment(self.args.augment)
-            train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8)
-            while epoch < self.args.train_epoch and best_count <= 3:
-                it = 0
-                for _, batch in tqdm(enumerate(train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
-                    label = torch.cat(batch['label'], 0)
-                    if torch.cuda.is_available():
-                        for k in batch:
-                            if k != 'label' and k != 'label2tag':
-                                batch[k] = batch[k].cuda()
-                        label = label.cuda()
-
-                    embedding, pred = self.model.train_forward(batch)
-                    loss = self.model.supcon_loss(embedding, label)
-                    tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                    pred_cnt += tmp_pred_cnt
-                    label_cnt += tmp_label_cnt
-                    correct_cnt += correct
-                    epoch_loss += self.item(loss.data)
-                    epoch_sample += 1
-                    if (it + 1) % 100 == 0:
-                        precision = correct_cnt / pred_cnt
-                        recall = correct_cnt / label_cnt
-                        f1 = 2 * precision * recall / (precision + recall) if precision + recall != 0 else float('inf')
-                        logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | precision: {2:2.6f}, recall: {3:2.6f}, f1: {4:2.6f}'
-                                    .format(it + 1, epoch_loss / epoch_sample, precision, recall, f1))
-                    it += 1
-                precision = correct_cnt / pred_cnt
-                recall = correct_cnt / label_cnt
-                f1 = 2 * precision * recall / (precision + recall) if precision + recall != 0 else float('inf')
-                logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f} | precision: {2:2.6f}, recall: {3:2.6f}, f1: {4:2.6f}'
-                            .format(epoch, epoch_loss / epoch_sample, precision, recall, f1))
-                
-                if (epoch + 1) % self.args.val_step == 0:
-                    # proto_dict = self.get_all_protos(train_data_loader)
-                    # self.model.update_global_protos(proto_dict)
-                    _, _, f1, _, _, _, _ = self.eval()
-                    # self.model.reset_protos()
-                    self.model.train()
-                    if f1 > best_f1:
-                        logger.info('Best checkpoint')
-                        torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
-                        best_f1 = f1
-                        best_count = 0
-                    best_count += 1
-                epoch_loss = 0.
-                epoch_sample = 0.
-                pred_cnt = 0
-                label_cnt = 0
-                correct_cnt = 0    
-                epoch += 1
-            if epoch < self.args.train_epoch:
-                logger.info('Early stop.')        
-            torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
-            logger.info('Finish contrastive training.')
-        if not self.args.only_train_encoder:
-            self.model.freeze_encoder()
-            self.train_dataset.set_augment(None)
-            super().train(load_ckpt=save_ckpt, save_ckpt=save_ckpt)
-
-    def get_all_protos(self, train_data_loader):
-        proto_dict, embed_cnt = {}, {}
-        self.train_dataset.set_augment(None)
-        with torch.no_grad():
-            for _, batch in tqdm(enumerate(train_data_loader), desc='computing protos', total=len(self.train_dataset) // self.args.batch_size):
-                if torch.cuda.is_available():
-                    for k in batch:
-                        if k != 'label' and k != 'label2tag':
-                            batch[k] = batch[k].cuda()
-                embedding = self.model.encode(batch)
-                tag = batch['label']
-                tag = torch.cat(tag, 0)
-                tag_set = set([int(_) for _ in tag.tolist()])
-                tag_set.discard(self.model.ignore_index)
-                for label in tag_set:
-                    if label not in proto_dict:
-                        proto_dict[label] = torch.sum(embedding[tag == label], dim=0)
-                        embed_cnt[label] = embedding[tag == label].size(0)
-                    else:
-                        proto_dict[label] = torch.sum(torch.cat((proto_dict[label].unsqueeze(0), embedding[tag == label]), dim=0),dim=0)
-                        embed_cnt[label] += embedding[tag == label].size(0)
-        for key in proto_dict:
-            proto_dict[key] = proto_dict[key] / embed_cnt[key]
-        self.train_dataset.set_augment(self.args.augment)
-        return proto_dict
-
 class ContinualNerEpisode(SupNerEpisode):
     def __init__(self, args: TypedArgumentParser, result_dict: dict):
         SupNerEpisode.__init__(self, args)
         self.test_datasets = {}
         self.result_dict = result_dict
     
-    def append_task(self, task, train_dataset: NerDataset, val_dataset: NerDataset, test_dataset: NerDataset):
+    def append_task(self, task, train_dataset, val_dataset, test_dataset):
         self.task = task
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
@@ -399,8 +277,8 @@ class ContinualNerEpisode(SupNerEpisode):
                 batch.pop('label')
                 _, pred = self.model(batch)
 
-                tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
-                fp, fn, token_cnt, within, outer, total_span = self.model.error_analysis(pred, label, batch['label2tag'])
+                tmp_pred_cnt, tmp_label_cnt, correct = self.evaluator.metrics_by_entity(pred, label)
+                fp, fn, token_cnt, within, outer, total_span = self.evaluator.error_analysis(pred, label, batch['label2tag'])
                 pred_cnt += tmp_pred_cnt
                 label_cnt += tmp_label_cnt
                 correct_cnt += correct
@@ -451,6 +329,24 @@ class ContinualNerEpisode(SupNerEpisode):
                     self.result_dict[task]['within_error'].append(within)
                     self.result_dict[task]['outer_error'].append(outer)
 
+class DistilledContinualNerEpisode(ContinualNerEpisode):
+
+    def __init__(self, args: TypedArgumentParser, result_dict: dict):
+        ContinualNerEpisode.__init__(args, result_dict)
+        self.teacher = None
+
+    def loss(self, batch, label):
+        pred, loss = super().loss(batch, label)
+        if self.teacher:
+            teacher_dist, _ = self.teacher.train_forward(batch)
+            student_dist, _ = self.model.train_forward(batch)
+            kl_div = F.kl_div(F.log_softmax(student_dist, dim=-1), F.softmax(teacher_dist, dim=-1))
+            return pred, self.args.alpha * loss + self.args.beta * kl_div
+        else:
+            return pred, loss
+
+    
+
 class OnlineNerEpisode(SupNerEpisode):
     def __init__(self, args, dataset=None):
         SupNerEpisode.__init__(self, args)
@@ -488,7 +384,7 @@ class OnlineNerEpisode(SupNerEpisode):
             logits, pred = self.model(batch)
             assert logits.shape[0] == label.shape[0]
             loss = self.model.loss(logits, label)
-            tmp_pred_cnt, tmp_label_cnt, correct = self.model.metrics_by_entity(pred, label)
+            tmp_pred_cnt, tmp_label_cnt, correct = self.evaluator.metrics_by_entity(pred, label)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
