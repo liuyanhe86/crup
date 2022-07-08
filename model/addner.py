@@ -1,73 +1,66 @@
 from ast import Add
 import logging
+from turtle import forward
 
 import torch
 from torch import nn
 
 from model import NERModel
 
-logger = logging.getLogger(__name__)        
+logger = logging.getLogger(__name__)
+
+class ParallelLinears(nn.Module):
+
+    def __init__(self, rep_dim) -> None:
+        nn.Module.__init__(self)
+        self.rep_dim = rep_dim
+        self.lc0 = nn.Linear(in_features=rep_dim, out_features=2)
+        self.n_lc = 1
+        self.lc_names = ['lc0']
+    
+    def add_lc(self):
+        name = f'lc{self.n_lc}'
+        self.add_module(name, nn.Linear(in_features=self.rep_dim, out_features=2))
+        self.lc_names.append(name)
+        self.n_lc += 1
+
+    def forward(self, rep):
+        all_logits = []
+        for name in self.lc_names:
+            logits = self.get_submodule(name)(rep)
+            all_logits.append(logits)
+        all_logits = torch.stack(all_logits)  # [n_lc, n_token, n_class(2)]
+        return all_logits
 
 class AddNER(NERModel):
     
-    def __init__(self, word_encoder, teacher=None, alpha=0.5, beta=0.5):
-        NERModel.__init__(self, word_encoder)
+    def __init__(self, word_encoder, ignore_index=-1):
+        NERModel.__init__(self, word_encoder, ignore_index)
         self.drop = nn.Dropout()
-        self.seen_types = {}
-        self.teacher = teacher
-        self.cur_type = None
-        self.alpha = alpha
-        self.beta = beta
+        self.linears = ParallelLinears(rep_dim=word_encoder.output_dim)
 
-    def forward(self, batch):
-        batch_emb = self.word_encoder(batch['sentence'], batch['attention_mask'])
-        batch_emb = self.drop(batch_emb)  # [batch_size, max_len, 768]
-        batch_emb = batch_emb[batch['text_mask']==1].view(-1, batch_emb.size(-1))  # [num_of_tokens, 768]
-        cur_lc = self.get_submodule(f'lc_{self.cur_type}')
-        logits = cur_lc(batch_emb)  # [num_of_tokens, class_num]
-        pred = self.predict(batch_emb)
-        return logits, pred
-    
-    def loss(self, logits, label):
-        return self.alpha * NERModel.loss(logits, label) + self.beta * self._KL(logits, label)
-    
-    def _KL(self, logits, label):
-        pass
+    def train_forward(self, x):
+        return self.forward(x)        
 
-    def predict(self, embedding):
-        lc_preds = []
-        for label in self.seen_labels:
-            lc = self.get_submodule(f'lc_{label}')
-            lc_pred = torch.max(lc(embedding), 1)
-            lc_preds.append(lc_pred)
-        lc_preds = torch.stack(lc_preds)
-        token_num = int(lc_preds.size(-1))
-        final_pred = []
-        for i in range(token_num):
-            token_pred = lc_preds[:, i].tolist()
-            if token_pred.count(0) == len(token_pred):
-                final_pred.append(0)
-            elif token_pred.count(0) == len(token_pred) - 1:
-                final_pred.append(x for x in token_pred if x != 0)
+    def forward(self, x):
+        rep = self.encode(x)
+        all_logits = self.linears(rep)
+        n_tokens = all_logits.size()[1]
+        pred = []
+        for i in range(n_tokens):
+            logits_i = all_logits[:, i, :]
+            _, pred_i = torch.max(logits_i, 1)
+            if torch.all(pred == 0):
+                pred.append(0)
+            elif len(pred_i[pred_i == 1]) == 1:
+                pred.append(torch.where(pred_i == 1)[0].item())
             else:
-                pred_set = set(token_pred)
-                pred_set.discard(0)
-                pred_count_dict = {_ : token_pred.count(_) for _ in pred_set}
-                max_prob = max(pred_count_dict.values())
-                max_pred = []
-                for pred in pred_set:
-                    if pred_count_dict[pred] == max_prob:
-                        max_pred.append(pred)
-                if len(max_pred) == 1:
-                    final_pred.append(max_pred[0])
-                else:
-                    candidates = [p for p in max_pred if i > 0 and final_pred[i - 1] == p]
-                    if len(candidates) == 1:
-                        final_pred.append(candidates[0])
-                    else:
-                        final_pred.append(0)
-        final_pred = torch.Tensor(final_pred)
-        if torch.cuda.is_available():
-            final_pred.cuda()
-        return final_pred
+                candidates = logits_i[torch.where(pred_i == 1)[0]][:, 1]
+                _, tmp_pred = torch.max(candidates, 0)
+                pred.append(torch.where(pred_i == 1)[tmp_pred])
+        pred = torch.as_tensor(pred)
+        return all_logits, pred
+
+
+        
 

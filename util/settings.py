@@ -3,9 +3,10 @@ import logging
 import os
 
 from transformers import BertTokenizer
+
 from util.args import TypedArgumentParser
-from util.datautils import ContinualNerDataset, MultiNerDataset, NerDataset, get_loader
-from util.episode import ContinualNerEpisode, OnlineNerEpisode, SupConNerEpisode, SupNerEpisode
+from util.datasets import ContinualNerDataset, MultiNerDataset, NerDataset, get_loader
+from util.episode import ContinualNerEpisode, DistilledContinualNerEpisode, OnlineNerEpisode, SupNerEpisode
 from util.tasks import PROTOCOLS
 
 logger = logging.getLogger(__name__)
@@ -20,10 +21,7 @@ class SupervisedSetting:
         val_dataset = NerDataset(os.path.join(supervised_task, 'dev.txt'), tokenizer, max_length=args.max_length)
         test_dataset = NerDataset(os.path.join(supervised_task, 'test.txt'), tokenizer, max_length=args.max_length)
         logger.info(f'train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
-        if args.augment:
-            sup_episode = SupConNerEpisode(args, train_dataset, val_dataset, test_dataset)
-        else:
-            sup_episode = SupNerEpisode(args, train_dataset, val_dataset, test_dataset)
+        sup_episode = SupNerEpisode(args, train_dataset, val_dataset, test_dataset)
         if not args.only_test:
             sup_episode.train(load_ckpt=args.load_ckpt, save_ckpt=ckpt)
         # test
@@ -40,11 +38,15 @@ class CiSetting:
         tokenizer = BertTokenizer.from_pretrained(args.pretrain_ckpt)
         result_dict = {task : {'precision': [], 'recall': [], 'f1': [], 'fp_error': [], 'fn_error':[], 'within_error':[], 'outer_error':[]} for task in ci_tasks}
         label2tag, tag2label = {0:'O'}, {'O':0}
-        continual_episode = ContinualNerEpisode(args, result_dict)
+        if args.model in {'AddNER', 'ExtendNER'}:
+            continual_episode = DistilledContinualNerEpisode(args, result_dict)
+        else:
+            continual_episode = ContinualNerEpisode(args, result_dict)
         for task in ci_tasks:
             train_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'train.txt'), tokenizer, augment=args.augment, max_length=args.max_length)
             val_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'dev.txt'), tokenizer, max_length=args.max_length)
             test_dataset = ContinualNerDataset(os.path.join(ci_tasks[task], 'test.txt'), tokenizer, max_length=args.max_length)
+            logger.info(f'[TASK] {task} | train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
             num_of_existing_labels = len(label2tag)
             for idx, tag in enumerate(list(train_dataset.classes)):
                 label2tag[idx + num_of_existing_labels] = tag

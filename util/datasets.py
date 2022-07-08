@@ -276,7 +276,7 @@ class NerDataset(Dataset):
             elif self.augment == 'permute':
                 view = self.samples[idx].permutation_augment()
             else:
-                raise NotImplementedError('ERROR: Invalid augmentation - {self.augment}')
+                raise NotImplementedError(f'ERROR: Invalid augmentation - {self.augment}')
             add_item(view)
         data_item['label2tag'] = self.label2tag
         return data_item
@@ -312,7 +312,6 @@ class ContinualNerDataset(NerDataset):
         self.label2tag = label2tag
         self.tag2label = tag2label
 
-    
 class MultiNerDataset(NerDataset):
     """
     Multi NER Dataset
@@ -347,6 +346,7 @@ class MultiNerDataset(NerDataset):
                 offset += 1
         return offset
     
+
 def collate_fn(data):
     batch = {'sentence': [], 'attention_mask': [], 'text_mask':[], 'label':[]}
     for i in range(len(data)):
@@ -358,6 +358,7 @@ def collate_fn(data):
     batch['label'] = [torch.tensor(tag_list).long() for tag_list in batch['label']]
     batch['label2tag'] = data[0]['label2tag']
     return batch
+
 
 def get_loader(dataset, batch_size, num_workers=4):
     if dataset:
@@ -374,12 +375,11 @@ def get_loader(dataset, batch_size, num_workers=4):
         return None
 
 if __name__ == '__main__':
-    file_path='data/few-nerd/supervised/train.txt'
+    file_path='data/few-nerd/coarse/supervised/train.txt'
     tokenizer=BertTokenizer.from_pretrained('bert-base-uncased')
-    max_length=100
+    max_length=10
     dataset = NerDataset(file_path, tokenizer, max_length=max_length)
-    dataset.set_augment(True)
-    train_loader = get_loader(dataset, batch_size=32, num_workers=8)
+    train_loader = get_loader(dataset, batch_size=2, num_workers=0)
     for i, batch in enumerate(train_loader):
         print(f'{batch["sentence"].shape}')
         with open('batch_example.txt', 'w') as f:

@@ -8,7 +8,8 @@ class TypedArgumentParser(Tap):
     train_epoch: int=10 # num of iters in training
     val_step: int=1  # val after training how many iters
     # warmup_step: int=300  # warm up steps before training
-    max_length: int=50 # max length of sentence
+    max_length: int=50  # max length of sentence
+    ignore_index: int=-1  # label without consideration
     augment: str=None # data augmentation, must in [None, 'remove', 'permute']
     lr: float=5e-2  # learning rate for encoder or joint training
     decoder_lr: float=2e-5  # learning rate for classifier training
@@ -26,6 +27,8 @@ class TypedArgumentParser(Tap):
     only_train_decoder: bool=False  # only train decoder with fixed encoder parameters
     proto_update: str='SDC'  # the way of updating prototypes, only for prototype-based models, must in ['replace', 'mean', 'SDC']
     embedding_dimension: int=64  # the dimension of the embedding used for contrastive learning
+    alpha: float=0.5
+    beta: float=0.5
     
     def __str__(self):
         return '; '.join([f'{name}: {self.__getattribute__(name)}' for name in self._get_argument_names()])
