@@ -11,8 +11,8 @@ python main.py \
         --dataset  coarse-few-nerd \
         --setting CI \
         --model ProtoNet \
-        --lr 2e-5 \
-        --proto_update mean \
+        --lr 5e-5 \
+        --proto_update replace \
         --metric dot
 
 # python main.py \
