@@ -300,7 +300,7 @@ class ContinualNerDataset(NerDataset):
     """
     def __init__(self, file_path: str, tokenizer, augment=False, max_length:int=10, ignore_label_id:int=-1):
         if not os.path.exists(file_path):
-            logger.error(f"[ERROR] Data file {file_path} does not exist!")
+            logger.error(f'Data file {file_path} does not exist!')
             assert(0)
         self.tokenizer = tokenizer
         self.augment = augment
@@ -346,6 +346,17 @@ class MultiNerDataset(NerDataset):
                 offset += 1
         return offset
     
+class GDumbSampler(Dataset):
+
+    def __init__(self, size=1000) -> None:
+        self.memory = []
+        self.size = size
+
+    def sample_ci(self, dataset: NerDataset):
+        pass
+
+    def sample_online(self, dataset: NerDataset):
+        pass
 
 def collate_fn(data):
     batch = {'sentence': [], 'attention_mask': [], 'text_mask':[], 'label':[]}

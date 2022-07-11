@@ -63,6 +63,7 @@ class SupNerEpisode:
         for name, param in state_dict.items():
             if name not in own_state:
                 continue
+            assert own_state[name].shape == param.shape, logger.error(f'target param shape: {own_state[name].shape}; source param shape: {param.shape}')
             own_state[name].copy_(param)
 
     
@@ -146,13 +147,16 @@ class SupNerEpisode:
                 if (it + 1) % 500 == 0:
                     precision = correct_cnt / pred_cnt
                     recall = correct_cnt / label_cnt
-                    f1 = 2 * precision * recall / (precision + recall) if precision + recall != 0 else float('inf')
+                    if precision + recall > 0:
+                        f1 = 2 * precision * recall / (precision + recall)
+                    else:
+                        f1 = 0
                     logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
                 .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
                 it += 1
             precision = correct_cnt / pred_cnt
             recall = correct_cnt / label_cnt
-            f1 = 2 * precision * recall / (precision + recall)
+            f1 = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0
             logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
                 .format(epoch + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
 
@@ -227,9 +231,15 @@ class SupNerEpisode:
                 within_cnt += within
                 total_span_cnt += total_span
     
-        precision = correct_cnt / pred_cnt
+        if pred_cnt > 0:
+            precision = correct_cnt / pred_cnt
+        else:
+            precision = 0
         recall = correct_cnt /label_cnt
-        f1 = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0
+        if precision > 0 and recall > 0:
+            f1 = 2 * precision * recall / (precision + recall)
+        else:
+            f1 = 0
         fp_error = fp_cnt / total_token_cnt
         fn_error = fn_cnt / total_token_cnt
         within_error = within_cnt / total_span_cnt
@@ -297,10 +307,15 @@ class ContinualNerEpisode(SupNerEpisode):
                 outer_cnt += outer
                 within_cnt += within
                 total_span_cnt += total_span
-
-            precision = correct_cnt / pred_cnt
+            if pred_cnt > 0:
+                precision = correct_cnt / pred_cnt
+            else:
+                precision = 0
             recall = correct_cnt /label_cnt
-            f1 = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0
+            if precision > 0 and recall > 0:
+                f1 = 2 * precision * recall / (precision + recall)
+            else:
+                f1 = 0
             fp_error = fp_cnt / total_token_cnt
             fn_error = fn_cnt / total_token_cnt
             within_error = within_cnt / total_span_cnt
@@ -345,7 +360,7 @@ class DistilledContinualNerEpisode(ContinualNerEpisode):
             if self.teacher:
                 teacher_dist, _ = self.teacher.train_forward(batch)
                 student_dist, _ = self.model.train_forward(batch)
-                kl_div = F.kl_div(F.log_softmax(student_dist[:-1], dim=-1), F.softmax(teacher_dist, dim=-1), reduction='batchmean')
+                kl_div = F.kl_div(F.log_softmax(student_dist[:-1], dim=-1), F.softmax(teacher_dist, dim=-1))
                 return self.args.alpha * ce_loss + self.args.beta * kl_div, pred
             else:
                 return ce_loss, pred
@@ -355,7 +370,7 @@ class DistilledContinualNerEpisode(ContinualNerEpisode):
             if self.teacher:
                 teacher_dist, _ = self.teacher.train_forward(batch)
                 student_dist, _ = self.model.train_forward(batch)
-                kl_div = F.kl_div(F.log_softmax(student_dist[:,:-1], dim=-1), F.softmax(teacher_dist, dim=-1), reduction='batchmean')
+                kl_div = F.kl_div(F.log_softmax(student_dist[:,:-1], dim=-1), F.softmax(teacher_dist, dim=-1))
                 return self.args.alpha * ce_loss + self.args.beta * kl_div, pred
             else:
                 return ce_loss, pred
@@ -377,6 +392,12 @@ class OnlineNerEpisode(SupNerEpisode):
         SupNerEpisode.__init__(self, args)
         self.dataset = dataset
         self.data_loader = get_loader(dataset=dataset, batch_size=args.batch_size, num_workers=8)
+
+    def loss(self, batch, label):
+        logits, pred = self.model(batch)
+        assert logits.shape[0] == label.shape[0]
+        loss = self.model.loss(logits, label)
+        return loss, pred
         
     def learn(self, save_ckpt):
         logger.info("Start online learning...")
@@ -405,9 +426,7 @@ class OnlineNerEpisode(SupNerEpisode):
                     if k != 'label' and k != 'label2tag':
                         batch[k] = batch[k].cuda()
                 label = label.cuda()
-            logits, pred = self.model(batch)
-            assert logits.shape[0] == label.shape[0]
-            loss = self.model.loss(logits, label)
+            loss, pred = self.loss(batch, label)
             tmp_pred_cnt, tmp_label_cnt, correct = self.evaluator.metrics_by_entity(pred, label)
             optimizer.zero_grad()
             loss.backward()
