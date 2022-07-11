@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
 
 # python main.py \
 #         --dataset coarse-few-nerd \
@@ -8,11 +8,11 @@ export CUDA_VISIBLE_DEVICES=2
 #         --only_test
 
 python main.py \
-        --dataset  coarse-few-nerd \
+        --dataset  stackoverflow \
         --setting CI \
         --model ProtoNet \
-        --lr 2e-5 \
-        --proto_update mean \
+        --lr 3e-4 \
+        --proto_update replace \
         --metric dot
 
 # python main.py \

@@ -11,7 +11,6 @@ class BertTagger(NERModel):
     
     def __init__(self, word_encoder):
         NERModel.__init__(self, word_encoder)
-        self.drop = nn.Dropout()
 
     def train_forward(self, x):
         return self.forward(x)

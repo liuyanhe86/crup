@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 class ProtoNet(NERModel):
     
-    def __init__(self, word_encoder, proto_update='SDC', metric='dot', ignore_index=-1):
-        NERModel.__init__(self, word_encoder, ignore_index)
+    def __init__(self, word_encoder, proto_update='SDC', metric='dot'):
+        NERModel.__init__(self, word_encoder)
         self.drop = nn.Dropout()
         self.proto_update = proto_update
         self.metric = metric
@@ -68,6 +68,7 @@ class ProtoNet(NERModel):
                     dist = torch.sqrt(torch.sum(torch.pow(self.Z_p - proto_i, 2), dim=1))
                     dist_mu = torch.mean(dist)
                     dist_variance = torch.mean(torch.pow(dist - dist_mu, 2))
+                    assert Z_c.shape[0] == self.Z_p.shape[0], logger.info(f'Z_c:{Z_c.shape}, Z_p:{self.Z_p.shape}')
                     delta = Z_c - self.Z_p
                     w = torch.exp(-torch.pow(dist, 2) / (2 * dist_variance)) + 1e-5
                     Delta = torch.sum(torch.unsqueeze(w, 1) * delta, dim=0) / torch.sum(w)
@@ -87,6 +88,19 @@ class ProtoNet(NERModel):
         protos = torch.stack(protos)
         return index2label, protos
 
+    def _init_protos(self, x):
+        self.word_encoder.requires_grad_(False)
+        Z_c = self.encode(x)
+        self.word_encoder.requires_grad_(True)
+        tag = torch.cat(x['label'], 0)
+        for i in range(torch.max(tag) + 1):
+            if i not in self.global_protos:
+                proto_i = torch.mean(Z_c[tag == i], dim=0)
+                if not torch.isnan(proto_i).any():
+                    self.global_protos[i] = proto_i
+                else:
+                    self.global_protos[i] = torch.zeros_like(proto_i)
+
     def start_training(self):
         self.first_batch = True
 
@@ -95,7 +109,7 @@ class ProtoNet(NERModel):
             rep = self._replace_or_mean(x)
         elif self.proto_update == 'SDC':
             if self.first_batch:  # initialize
-                self._semantic_drift_compensation(x)
+                self._init_protos(x)
                 self.first_batch = False
             else:
                 self._semantic_drift_compensation(self.current_batch)

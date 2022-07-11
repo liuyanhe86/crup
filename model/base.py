@@ -8,8 +8,6 @@ class NERModel(nn.Module):
     def __init__(self, my_word_encoder): 
         '''
         word_encoder: Sentence encoder
-        
-        You need to set self.cost as your own loss function.
         '''
         nn.Module.__init__(self)
         self.word_encoder = nn.DataParallel(my_word_encoder)
@@ -70,7 +68,7 @@ class NERModel(nn.Module):
     #     supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
     #     return supervised_contrastive_loss
 
-    def freeze_encoder(self):
-        self.word_encoder.requires_grad_(False)
+    def freeze(self):
+        raise NotImplementedError
 
     

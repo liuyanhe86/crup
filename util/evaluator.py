@@ -1,5 +1,7 @@
+import logging
 import torch
 
+logger = logging.getLogger(__name__)
 class Evaluater:
 
     def __init__(self, ignore_index=-1) -> None:
@@ -161,7 +163,7 @@ class Evaluater:
         correct_cnt = self.__get_intersect_by_entity__(pred_class_span, label_class_span)
         return pred_cnt, label_cnt, correct_cnt
 
-    def error_analysis(self, pred, label, label2tag):
+    def error_analysis(self, pred:torch.Tensor, label:torch.Tensor, label2tag):
         '''
         return 
         token level false positive rate and false negative rate

@@ -7,7 +7,7 @@ import torch
 import transformers
 
 from util.args import TypedArgumentParser
-from util.settings import CiSetting, MultiTaskSetting, OnlineSetting, SupervisedSetting
+from util.settings import CiSetting, MultiTaskSetting, OnlineSetting, SupervisedSetting, GDumb
 
 
 def init_logging(filename):
@@ -50,27 +50,27 @@ def main():
     logger = logging.getLogger(__name__)
     logger.info(f'PID: {os.getpid()}; PPID: {os.getppid()}')
 
-    logger.info(f'EXP CONFIG: {args}')
-    if not os.path.exists('checkpoint'):
-        os.mkdir('checkpoint')
-    ckpt = f'checkpoint/{args.setting}_{args.dataset}_{args.model}{"_" + args.proto_update if args.model == "ProtoNet" else ""}{"_" + args.metric if args.model == "ProtoNet" else ""}.pth.tar'
-    logger.info(f'model-save-path: {ckpt}')
-
     if args.setting == 'sup':
-        setting = SupervisedSetting()
-        setting.execute(args, ckpt=ckpt)
+        setting = SupervisedSetting(args)
+        setting.run()
     
     elif args.setting == 'CI':
-        setting = CiSetting()
-        setting.execute(args, ckpt=ckpt)
+        if args.model == 'GDumb':
+            setting = GDumb(args)
+        else:
+            setting = CiSetting(args)
+        setting.run()
 
     elif args.setting == 'online':
-        setting = OnlineSetting()
-        setting.execute(args, ckpt=ckpt)
+        if args.model == 'GDumb':
+            setting = GDumb(args)
+        else:
+            setting = OnlineSetting(args)
+        setting.run()
 
     elif args.setting == 'multi-task':
-        setting = MultiTaskSetting()
-        setting.execute(args, ckpt=ckpt)
+        setting = MultiTaskSetting(args)
+        setting.run()
     
     else:
         raise NotImplementedError(f'{args.setting} has not been implemented!')

@@ -6,10 +6,10 @@ def get_ci_coarse_few_nerd():
     return {key: 'data/few-nerd/coarse/disjoint/' + key for key in COARSE_FEW_NERD}
 
 def get_ci_fine_few_nerd():
-    return {key: 'data/few-nerd/fine/disjoint/' + key for key in COARSE_FEW_NERD}
+    return {key: 'data/few-nerd/fine/disjoint/' + key for key in FINE_FEW_NERD}
 
 def get_ci_stackoverflow():
-    return {key: 'data/stackoverlfow/disjoint/' + key for key in STACKOVERFLOW}
+    return {key: 'data/stackoverflow/disjoint/' + key for key in STACKOVERFLOW}
 
 def get_online_coarse_few_nerd():
     return {key: 'data/few-nerd/coarse/joint/' + key for key in COARSE_FEW_NERD}
@@ -18,7 +18,7 @@ def get_online_fine_few_nerd():
     return {key: 'data/few-nerd/fine/joint/' + key for key in FINE_FEW_NERD}
 
 def get_online_stackoverflow():
-    return {key: 'data/stackoverlfow/joint/' + key for key in STACKOVERFLOW}
+    return {key: 'data/stackoverflow/joint/' + key for key in STACKOVERFLOW}
 
 PROTOCOLS = {
     'sup coarse-few-nerd': 'data/few-nerd/coarse/supervised',
