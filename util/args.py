@@ -23,6 +23,8 @@ class TypedArgumentParser(Tap):
     embedding_dimension: int=64  # the dimension of the embedding used for contrastive learning
     alpha: float=0.5
     beta: float=0.5
+    gdumb_size: int=1000
+    gdumb_check_steps: int=100
     
     def __str__(self):
         return '; '.join([f'{name}: {self.__getattribute__(name)}' for name in self._get_argument_names()])

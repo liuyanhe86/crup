@@ -8,11 +8,11 @@ export CUDA_VISIBLE_DEVICES=0
 #         --only_test
 
 python main.py \
-        --dataset  stackoverflow \
+        --dataset  fine-few-nerd \
         --setting CI \
         --model ProtoNet \
-        --lr 3e-4 \
-        --proto_update replace \
+        --lr 5e-3 \
+        --proto_update SDC \
         --metric dot
 
 # python main.py \

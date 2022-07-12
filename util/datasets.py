@@ -1,4 +1,5 @@
 import logging
+from pprint import pprint
 import numpy as np
 import os
 import random
@@ -148,10 +149,10 @@ class NerDataset(Dataset):
             logger.error(f"data file {file_path} does not exist!")
             assert(0)
         self.tokenizer = tokenizer
-        self.augment = None
+        # self.augment = None
         self.samples, self.classes = self.__load_data_from_file__(file_path)
         # add 'O' and make sure 'O' is labeled 0
-        distinct_tags = ['O'] + list(self.classes)
+        distinct_tags = ['O'] + self.classes
         self.tag2label = {tag:idx for idx, tag in enumerate(distinct_tags)}
         self.label2tag = {idx:tag for idx, tag in enumerate(distinct_tags)}
         self.max_length = max_length
@@ -270,14 +271,14 @@ class NerDataset(Dataset):
             data_item['text_mask'] += text_mask
             data_item['label'] += label
         add_item(self.samples[idx])
-        if self.augment:
-            if self.augment == 'remove':
-                view = self.samples[idx].remove_augment()
-            elif self.augment == 'permute':
-                view = self.samples[idx].permutation_augment()
-            else:
-                raise NotImplementedError(f'ERROR: Invalid augmentation - {self.augment}')
-            add_item(view)
+        # if self.augment:
+        #     if self.augment == 'remove':
+        #         view = self.samples[idx].remove_augment()
+        #     elif self.augment == 'permute':
+        #         view = self.samples[idx].permutation_augment()
+        #     else:
+        #         raise NotImplementedError(f'ERROR: Invalid augmentation - {self.augment}')
+        #     add_item(view)
         data_item['label2tag'] = self.label2tag
         return data_item
 
@@ -291,8 +292,8 @@ class NerDataset(Dataset):
     def get_label_set(self):
         return set(self.label2tag.keys())
     
-    def set_augment(self, value):
-        self.augment = value
+    # def set_augment(self, value):
+    #     self.augment = value
 
 class ContinualNerDataset(NerDataset):
     """
@@ -303,12 +304,13 @@ class ContinualNerDataset(NerDataset):
             logger.error(f'Data file {file_path} does not exist!')
             assert(0)
         self.tokenizer = tokenizer
-        self.augment = augment
-        self.samples, self.classes = self.__load_data_from_file__(file_path)
+        # self.augment = augment
+        self.samples, classes = self.__load_data_from_file__(file_path)
+        self.current_class = classes[0]
         self.max_length = max_length
         self.ignore_label_id = ignore_label_id
 
-    def set_labelmap(self, label2tag, tag2label):
+    def set_labelmap(self, label2tag:dict, tag2label:dict):
         self.label2tag = label2tag
         self.tag2label = tag2label
 
@@ -346,14 +348,35 @@ class MultiNerDataset(NerDataset):
                 offset += 1
         return offset
     
-class GDumbSampler(Dataset):
+class GDumbSampler(NerDataset):
 
     def __init__(self, size=1000) -> None:
-        self.memory = []
+        self.samples = []
+        self.budget = {}
         self.size = size
+        self.n_class = 0
 
-    def sample_ci(self, dataset: NerDataset):
-        pass
+    def sample_ci(self, dataset: ContinualNerDataset):
+        self.tokenizer, self.max_length, self.ignore_label_id, self.label2tag, self.tag2label = dataset.tokenizer, dataset.max_length, dataset.ignore_label_id, dataset.label2tag, dataset.tag2label
+        new_class_samples = []
+        self.n_class += 1
+        max_samples_per_class = self.size // self.n_class
+        seen_indices = set()
+        count = 0
+        while len(new_class_samples) < max_samples_per_class and count < len(dataset):
+            index = random.randint(0, len(dataset) - 1)
+            if index not in seen_indices:
+                new_class_samples.append(dataset.samples[index])
+                seen_indices.add(index)
+                count += 1
+        self.budget[dataset.current_class] = new_class_samples
+        max_samples_per_class = min([len(self.budget[_]) for _ in self.budget])
+        for sampled_class in self.budget:
+            while len(self.budget[sampled_class]) > max_samples_per_class:
+                self.budget[sampled_class].pop(random.randint(0, len(self.budget[sampled_class]) - 1))
+        self.samples.clear()
+        for _, samples_per_class in self.budget.items():
+            self.samples += samples_per_class
 
     def sample_online(self, dataset: NerDataset):
         pass
@@ -386,15 +409,46 @@ def get_loader(dataset, batch_size, num_workers=4):
         return None
 
 if __name__ == '__main__':
-    file_path='data/few-nerd/coarse/supervised/train.txt'
+    # file_path='data/few-nerd/fine/supervised/train.txt'
     tokenizer=BertTokenizer.from_pretrained('bert-base-uncased')
-    max_length=10
-    dataset = NerDataset(file_path, tokenizer, max_length=max_length)
-    train_loader = get_loader(dataset, batch_size=2, num_workers=0)
-    for i, batch in enumerate(train_loader):
-        print(f'{batch["sentence"].shape}')
+    max_length=50
+    # dataset = NerDataset(file_path, tokenizer, max_length=max_length)
+    conti_file_path1='data/few-nerd/coarse/disjoint/art/train.txt'
+    conti_file_path2='data/few-nerd/coarse/disjoint/event/train.txt'
+    label2tag, tag2label = {0:'O'}, {'O':0}
+    dataset1 = ContinualNerDataset(conti_file_path1, tokenizer, max_length=max_length)
+    num_of_existing_labels = len(label2tag)
+    label2tag[num_of_existing_labels] = dataset1.current_class
+    tag2label[dataset1.current_class] = num_of_existing_labels
+    dataset1.set_labelmap(label2tag, tag2label)
+    loader = get_loader(dataset1, batch_size=1, num_workers=0)
+    for i, batch in enumerate(loader):
         with open('batch_example.txt', 'w') as f:
             f.writelines(str(batch))
+        break
+    dataset2 = ContinualNerDataset(conti_file_path2, tokenizer, max_length=max_length)
+    num_of_existing_labels = len(label2tag)
+    label2tag[num_of_existing_labels] = dataset2.current_class
+    tag2label[dataset2.current_class] = num_of_existing_labels
+    dataset2.set_labelmap(label2tag, tag2label)
+    loader = get_loader(dataset2, batch_size=1, num_workers=0)
+    for i, batch in enumerate(loader):
+        with open('batch_example.txt', 'a') as f:
+            f.writelines(str(batch))
+        break
+    sampler = GDumbSampler()
+    sampler.sample_ci(dataset1)
+    pprint(sampler.budget.keys())
+    loader = get_loader(sampler, batch_size=1)
+    for i, batch in enumerate(loader):
+        pprint(batch)
+        break
+
+    sampler.sample_ci(dataset2)
+    pprint(sampler.budget.keys())
+    loader = get_loader(sampler, batch_size=1)
+    for i, batch in enumerate(loader):
+        pprint(batch)
         break
 
     

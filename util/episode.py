@@ -1,3 +1,4 @@
+from cmath import e
 import copy
 import logging
 import os
@@ -9,7 +10,7 @@ from tqdm import tqdm
 from torch.optim import AdamW, SGD
 
 from util.args import TypedArgumentParser
-from util.datasets import get_loader
+from util.datasets import GDumbSampler, get_loader
 from util.evaluator import Evaluater
 from model import BERTWordEncoder, BertTagger, PCP, ProtoNet, AddNER, ExtendNER
 
@@ -20,7 +21,7 @@ def get_model(args: TypedArgumentParser):
     word_encoder = BERTWordEncoder(pretrain_path=args.pretrain_ckpt)
     if args.model == 'ProtoNet':
         model = ProtoNet(word_encoder, proto_update=args.proto_update, metric=args.metric)
-    elif args.model == 'Bert-Tagger':
+    elif args.model == 'Bert-Tagger' or 'GDumb':
         model = BertTagger(word_encoder)
     elif args.model == 'PCP':
         model = PCP(word_encoder, embedding_dimension=args.embedding_dimension, temperature=args.temperature)
@@ -29,14 +30,14 @@ def get_model(args: TypedArgumentParser):
     elif args.model == 'ExtendNER':
         model = ExtendNER(word_encoder)
     else:
-        raise NotImplementedError(f'Error: Model {args.model} not implemented!')
+        raise NotImplementedError(f'Error: Invalid model - {args.model}!')
     if torch.cuda.is_available():
         model = model.cuda()
     return model
 
 class SupNerEpisode:
 
-    def __init__(self, args: TypedArgumentParser, load_ckpt=None, train_dataset=None, val_dataset=None, test_dataset=None):
+    def __init__(self, args: TypedArgumentParser, train_dataset=None, val_dataset=None, test_dataset=None):
         self.args = args
         self.model = get_model(args)
         self.embedding_dim = 768
@@ -47,7 +48,7 @@ class SupNerEpisode:
         self.evaluator = Evaluater(ignore_index=args.ignore_index)
 
     def initialize_model(self):
-        if self.args.model == 'Bert-Tagger':
+        if self.args.model == 'Bert-Tagger' or self.args.model == 'GDumb':
             lc = nn.Linear(in_features=self.embedding_dim, out_features=len(self.train_dataset.get_label_set()))
             if torch.cuda.is_available():
                 self.model.add_module('lc', lc.cuda())
@@ -65,7 +66,6 @@ class SupNerEpisode:
                 continue
             assert own_state[name].shape == param.shape, logger.error(f'target param shape: {own_state[name].shape}; source param shape: {param.shape}')
             own_state[name].copy_(param)
-
     
     def __load_model__(self, ckpt):
         '''
@@ -95,13 +95,13 @@ class SupNerEpisode:
         return cost(logits.view(-1, N), label.view(-1))
 
     def loss(self, batch, label):
-        if self.args.augment:
-            (mu, sigma), pred = self.model.train_forward(batch)
-            pass
-        else:
+        if self.args.model == 'Bert-Tagger' or 'ProtoNet':
             logits, pred = self.model.train_forward(batch)
             assert logits.shape[0] == label.shape[0]
             return self.default_loss(logits, label), pred
+        else:
+            (mu, sigma), pred = self.model.train_forward(batch)
+            pass
 
     def train(self, save_ckpt=None):
         logger.info('Start training ...')
@@ -160,7 +160,7 @@ class SupNerEpisode:
             logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
                 .format(epoch + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
 
-            if (epoch + 1) % self.args.val_step == 0:
+            if (epoch + 1) % self.args.val_step == 0 and self.val_dataset:
                 _, _, f1, _, _, _, _ = self.eval()
                 self.model.train()
                 if f1 > best_f1:
@@ -177,6 +177,8 @@ class SupNerEpisode:
             epoch += 1
         if epoch + 1 < self.args.train_epoch:
             logger.info('Early stop')
+        if best_f1 == 0.0 or self.val_dataset is None:
+            torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
         logger.info(f'Finish training {self.args.model} on {self.args.dataset} in {self.args.setting} setting.')
 
     def eval(self, ckpt=None): 
@@ -264,10 +266,6 @@ class ContinualNerEpisode(SupNerEpisode):
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.test_datasets[task] = test_dataset
-
-    def finish_task(self):
-        if self.args.model == 'ProtoNet':
-            logger.info(f'num of current prototypes: {len(self.model.global_protos)}')
 
     def eval(self, ckpt=None): 
         logger.info('Start evaluating...')
@@ -385,7 +383,6 @@ class DistilledContinualNerEpisode(ContinualNerEpisode):
             elif self.args.model == 'ExtendNER':
                 self.model.add_unit()
                 
-    
 
 class OnlineNerEpisode(SupNerEpisode):
     def __init__(self, args:TypedArgumentParser, dataset=None):
@@ -393,23 +390,46 @@ class OnlineNerEpisode(SupNerEpisode):
         self.dataset = dataset
         self.data_loader = get_loader(dataset=dataset, batch_size=args.batch_size, num_workers=8)
 
+    def learn(self, ckpt):
+        if self.args.model == 'GDumb':
+            self.sampler = GDumbSampler()
+            self.data_until_check_step = []
+            self.learn_by_step(ckpt)
+        else:
+            self.learn_by_batch(ckpt)
+
     def loss(self, batch, label):
-        logits, pred = self.model(batch)
-        assert logits.shape[0] == label.shape[0]
-        loss = self.model.loss(logits, label)
-        return loss, pred
+        if self.args.model == 'GDumb':
+            logits, pred = self.model.train_forward(batch)
+            assert logits.shape[0] == label.shape[0]
+            loss = self.default_loss(logits, label)
+            return loss, pred
+        else:
+            (mu, sigma), pred = self.model.train_forward(batch)
+            pass
+
+    def learn_by_step(self, save_ckpt):
+        it = 0
+        for _, batch in enumerate(self.data_loader):
+            
+            self.sampler.sample_online(batch)
+            if (it + 1) % self.args.gdumb_check_steps == 0:
+                self.train_dataset = self.sampler
+                super().train(save_ckpt)
+
+                
         
-    def learn(self, save_ckpt):
+    def learn_by_batch(self, save_ckpt):
         logger.info("Start online learning...")
         # Init optimizer
         parameters_to_optimize = self.model.get_parameters_to_optimize()
 
-        if self.args.use_sgd:
-            logger.info('Optimizer: SGD')
-            optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
-        else:
-            logger.info('Optimizer: AdamW')
-            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)        
+        # if self.args.use_sgd:
+        logger.info('Optimizer: SGD')
+        optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
+        # else:
+        #     logger.info('Optimizer: AdamW')
+        #     optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)        
 
         self.model.train()
         # Training
@@ -419,7 +439,7 @@ class OnlineNerEpisode(SupNerEpisode):
         label_cnt = 0
         correct_cnt = 0
         it = 0
-        for _, batch in enumerate(self.data_loader):
+        for _, batch in tqdm(enumerate(self.data_loader), desc='online learning progress', total=len(self.dataset) // self.args.batch_size):
             label = torch.cat(batch['label'], 0)
             if torch.cuda.is_available():
                 for k in batch:
