@@ -32,7 +32,7 @@ class SupervisedSetting(Setting):
         tokenizer = BertTokenizer.from_pretrained(self.args.pretrain_ckpt)
         logger.info('loading data...')
         supervised_task = PROTOCOLS[self.args.setting + ' ' + self.args.dataset]
-        train_dataset = NerDataset(os.path.join(supervised_task, 'train.txt'), tokenizer, max_length=self.args.max_length, ignore_label_id=self.args.ignore_index)
+        train_dataset = NerDataset(os.path.join(supervised_task, 'train.txt'), tokenizer, augment=self.args.augment, max_length=self.args.max_length, ignore_label_id=self.args.ignore_index)
         val_dataset = NerDataset(os.path.join(supervised_task, 'dev.txt'), tokenizer, max_length=self.args.max_length, ignore_label_id=self.args.ignore_index)
         test_dataset = NerDataset(os.path.join(supervised_task, 'test.txt'), tokenizer, max_length=self.args.max_length, ignore_label_id=self.args.ignore_index)
         logger.info(f'train size: {len(train_dataset)}, val size: {len(val_dataset)}, test size: {len(test_dataset)}')
@@ -105,7 +105,7 @@ class OnlineSetting(Setting):
                 file_path = os.path.join(online_tasks[task], split)
                 offset = online_dataset.append(file_path=file_path, label_offset=label_offset)
                 label_offset += offset
-        logger.info(f'online dataset size: {len(online_dataset)}')
+        logger.info(f'online dataset size: {len(online_dataset)}') 
         online_episode = OnlineNerEpisode(self.args, online_dataset)
         online_episode.learn(save_ckpt=self.ckpt)
         logger.info('Online finished!')

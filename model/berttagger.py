@@ -1,7 +1,6 @@
 import logging
 
 import torch
-from torch import nn
 
 from model import NERModel
 
@@ -16,7 +15,7 @@ class BertTagger(NERModel):
         return self.forward(x)
 
     def forward(self, x):
-        embedding = self.encode(x)
-        logits = self.lc(embedding)  # [num_of_tokens, class_num]
+        rep = self.encode(x)
+        logits = self.lc(rep)  # [num_of_tokens, class_num]
         _, pred = torch.max(logits, 1)
         return logits, pred

@@ -1,8 +1,8 @@
 export CUDA_VISIBLE_DEVICES=2
 
 python main.py \
-        --dataset fine-few-nerd \
+        --dataset stackoverflow \
         --setting CI \
         --model GDumb  \
-        --lr 5e-3 \
-        --gdumb_size 3000
+        --lr 2e-5 \
+        --gdumb_size 1000

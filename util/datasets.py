@@ -144,12 +144,12 @@ class NerDataset(Dataset):
     """
     NER Dataset
     """
-    def __init__(self, file_path:str, tokenizer, max_length:int=10, ignore_label_id:int=-1):
+    def __init__(self, file_path:str, tokenizer, augment=None, max_length:int=10, ignore_label_id:int=-1):
         if not os.path.exists(file_path):
             logger.error(f"data file {file_path} does not exist!")
             assert(0)
         self.tokenizer = tokenizer
-        # self.augment = None
+        self.augment = augment
         self.samples, self.classes = self.__load_data_from_file__(file_path)
         # add 'O' and make sure 'O' is labeled 0
         distinct_tags = ['O'] + self.classes
@@ -271,14 +271,14 @@ class NerDataset(Dataset):
             data_item['text_mask'] += text_mask
             data_item['label'] += label
         add_item(self.samples[idx])
-        # if self.augment:
-        #     if self.augment == 'remove':
-        #         view = self.samples[idx].remove_augment()
-        #     elif self.augment == 'permute':
-        #         view = self.samples[idx].permutation_augment()
-        #     else:
-        #         raise NotImplementedError(f'ERROR: Invalid augmentation - {self.augment}')
-        #     add_item(view)
+        if self.augment:
+            if self.augment == 'remove':
+                view = self.samples[idx].remove_augment()
+            elif self.augment == 'permute':
+                view = self.samples[idx].permutation_augment()
+            else:
+                raise NotImplementedError(f'ERROR: Invalid augmentation - {self.augment}')
+            add_item(view)
         data_item['label2tag'] = self.label2tag
         return data_item
 
@@ -291,20 +291,17 @@ class NerDataset(Dataset):
 
     def get_label_set(self):
         return set(self.label2tag.keys())
-    
-    # def set_augment(self, value):
-    #     self.augment = value
 
 class ContinualNerDataset(NerDataset):
     """
     Continual NER Dataset
     """
-    def __init__(self, file_path: str, tokenizer, augment=False, max_length:int=10, ignore_label_id:int=-1):
+    def __init__(self, file_path: str, tokenizer, augment=None, max_length:int=10, ignore_label_id:int=-1):
         if not os.path.exists(file_path):
             logger.error(f'Data file {file_path} does not exist!')
             assert(0)
         self.tokenizer = tokenizer
-        # self.augment = augment
+        self.augment = augment
         self.samples, classes = self.__load_data_from_file__(file_path)
         self.current_class = classes[0]
         self.max_length = max_length

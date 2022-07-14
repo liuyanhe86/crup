@@ -16,7 +16,7 @@ class TypedArgumentParser(Tap):
     pretrain_ckpt: str='bert-base-uncased'  # bert / roberta pre-trained checkpoint
     metric: str='dot'  # metric used to compute distance between embedding and prototypes, must in ['dot', 'L2']
     temperature: float=0.1  # temperature for supervised contrastive loss
-    use_sgd: bool=False  # use SGD instead of AdamW for BERT
+    optimizer: str='SGD'  
     only_test: bool=False
     start_task: int=0
     proto_update: str='SDC'  # the way of updating prototypes, only for prototype-based models, must in ['replace', 'mean', 'SDC']

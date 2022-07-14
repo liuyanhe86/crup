@@ -1,4 +1,3 @@
-from cmath import e
 import copy
 import logging
 import os
@@ -21,13 +20,14 @@ def get_model(args: TypedArgumentParser):
     word_encoder = BERTWordEncoder(pretrain_path=args.pretrain_ckpt)
     if args.model == 'ProtoNet':
         model = ProtoNet(word_encoder, proto_update=args.proto_update, metric=args.metric)
-    elif args.model == 'Bert-Tagger' or 'GDumb':
+    elif args.model == 'Bert-Tagger' or args.model == 'GDumb':
         model = BertTagger(word_encoder)
     elif args.model == 'PCP':
-        model = PCP(word_encoder, embedding_dimension=args.embedding_dimension, temperature=args.temperature)
+        model = PCP(word_encoder,proto_update=args.proto_update, metric=args.metric, embedding_dimension=args.embedding_dimension)
     elif args.model == 'AddNER':
         model = AddNER(word_encoder)
     elif args.model == 'ExtendNER':
+        logger.info('model: ExtendNER')
         model = ExtendNER(word_encoder)
     else:
         raise NotImplementedError(f'Error: Invalid model - {args.model}!')
@@ -54,7 +54,7 @@ class SupNerEpisode:
                 self.model.add_module('lc', lc.cuda())
             else:
                 self.model.add_module('lc', lc)
-        elif self.args.model == 'ProtoNet':
+        else:
             if self.args.proto_update == 'SDC':
                 self.model.start_training()
         
@@ -89,26 +89,110 @@ class SupNerEpisode:
         else:
             return x.item()
 
-    def default_loss(self, logits, label):
+    def _default_loss(self, logits, label):
         N = logits.size(-1)
         cost = nn.CrossEntropyLoss(ignore_index=self.args.ignore_index)
         return cost(logits.view(-1, N), label.view(-1))
+    
+    def _supcon_loss(self, embedding, labels):
+        embedding = embedding[labels != self.args.ignore_index]
+        labels = labels[labels != self.args.ignore_index]
+        z_i, z_j = embedding, embedding.T
+        dot_product_tempered = torch.mm(z_i, z_j) / self.args.temperature  # z_i dot z_j / tau
+        # Minus max for numerical stability with exponential. Same done in cross entropy. Epsilon added to avoid log(0)
+        exp_dot_tempered = (
+            torch.exp(dot_product_tempered - torch.max(dot_product_tempered, dim=1, keepdim=True)[0]) + 1e-5
+        )
+        if torch.cuda.is_available():
+            mask_similar_class = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels).cuda()
+        else:
+            mask_similar_class = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels)
+        if torch.cuda.is_available():
+            mask_anchor_out = 1 - torch.eye(exp_dot_tempered.shape[0]).cuda()
+        else:
+            mask_anchor_out = 1 - torch.eye(exp_dot_tempered.shape[0])
+        mask_combined = mask_similar_class * mask_anchor_out
+        cardinality_per_batchs = torch.sum(mask_combined, dim=1)
+        log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered * mask_anchor_out, dim=1, keepdim=True)))
+        supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
+        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
+        return supervised_contrastive_loss
+
+    def _kl_div(self, mu:torch.Tensor, sigma:torch.Tensor):
+        # logger.info(f'mu.shape:{mu.shape}, sigma.shape:{sigma.shape}')
+        # n_samples = mu.shape[0]
+        # matrix = torch.zeros(n_samples, n_samples)
+        # for i in range(n_samples):
+        #     logger.info(f'i:{i}')
+        #     for j in range(n_samples):
+        #         if i != j:
+        #             logger.info(f'  j:{j}')
+        #             mu_1, mu_2, sigma_1, sigma_2 = mu[i].detach(), mu[j].detach(), torch.diag(sigma[i].detach()), torch.diag(sigma[j].detach())
+        #             log_det = torch.log(torch.linalg.det(sigma_2)/torch.linalg.det(sigma_1))
+        #             trace = torch.trace(torch.linalg.inv(sigma_2) * sigma_1)
+        #             mm = torch.sum((mu_1 - mu_2) * torch.linalg.inv(sigma_2) * (mu_1 - mu_2))
+        #             matrix[i, j] = 0.5 * (log_det - n_samples + trace + mm)
+        n_tokens, embed_dim = mu.shape[0], mu.shape[1]
+        mu1_mu2_diff_mat =  mu.unsqueeze(1) -  mu.unsqueeze(0).repeat(n_tokens, 1, 1)  # [n_tokens, n_tokens, embed_dim]
+        if torch.cuda.is_available():
+            sigma = sigma.unsqueeze(1) * torch.eye(embed_dim).cuda()  # [n_tokens, embed_dim ,embed_dim]
+        else:
+            sigma = sigma.unsqueeze(1) * torch.eye(embed_dim).cuda()
+        sigma_log_det = torch.linalg.det(sigma)
+        sigma_log_det_ratio = torch.log((1 / sigma_log_det).unsqueeze(1) * sigma_log_det)
+        sigma_inverse = torch.linalg.inv(sigma)  # [n_tokens, embed_dim ,embed_dim]
+        sigma_mut_trace = torch.sum(sigma.unsqueeze(1) * sigma_inverse, dim=(-1,-2))
+        return 0.5 * (sigma_log_det_ratio - embed_dim + sigma_mut_trace + torch.sum(mu1_mu2_diff_mat.unsqueeze(-1) * sigma_inverse * mu1_mu2_diff_mat.unsqueeze(-1), dim=(-1,-2)))
+
+
+    def _kl_div_loss(self, mu:torch.Tensor, sigma:torch.Tensor, label:torch.Tensor):
+        mu, sigma = mu[label != self.args.ignore_index], sigma[label != self.args.ignore_index]
+        label = label[label != self.args.ignore_index]
+        kl_divs = self._kl_div(mu, sigma)  # / self.args.temperature  # z_i dot z_j / tau
+        # Minus max for numerical stability with exponential. Same done in cross entropy. Epsilon added to avoid log(0)
+        exp_dot_tempered = (
+            torch.exp(kl_divs - torch.max(kl_divs, dim=1, keepdim=True)[0]) + 1e-5
+        )
+        if torch.cuda.is_available():
+            mask_similar_class = (label.unsqueeze(1).repeat(1, label.shape[0]) == label).cuda()
+        else:
+            mask_similar_class = (label.unsqueeze(1).repeat(1, label.shape[0]) == label)
+        if torch.cuda.is_available():
+            mask_anchor_out = 1 - torch.eye(exp_dot_tempered.shape[0]).cuda()
+        else:
+            mask_anchor_out = 1 - torch.eye(exp_dot_tempered.shape[0])
+        mask_combined = mask_similar_class * mask_anchor_out
+        cardinality_per_batchs = torch.sum(mask_combined, dim=1)
+        log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered * mask_anchor_out, dim=1, keepdim=True)))
+        supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
+        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
+        return supervised_contrastive_loss
+        
 
     def loss(self, batch, label):
-        if self.args.model == 'Bert-Tagger' or 'ProtoNet':
+        if self.args.model == 'Bert-Tagger' or self.args.model == 'ProtoNet':
             logits, pred = self.model.train_forward(batch)
             assert logits.shape[0] == label.shape[0]
-            return self.default_loss(logits, label), pred
+            return self._default_loss(logits, label), pred
+        # elif self.args.augment:
+        #     embedding, pred = self.model.train_forward(batch)
+        #     return self._supcon_loss(embedding, label), pred
         else:
-            (mu, sigma), pred = self.model.train_forward(batch)
-            pass
+            mu, sigma, pred = self.model.train_forward(batch)
+            return self._kl_div_loss(mu, sigma, label), pred
 
     def train(self, save_ckpt=None):
         logger.info('Start training ...')
         # Init optimizer
         parameters_to_optimize = self.model.get_parameters_to_optimize()
-        logger.info('Optimizer: SGD')
-        optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
+        if self.args.optimizer == 'SGD':
+            logger.info('Optimizer: SGD')
+            optimizer = SGD(parameters_to_optimize, lr=self.args.lr)
+        elif self.args.optimizer == 'AdamW':
+            logger.info('Optimizer: AdamW')
+            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
+        else:
+            raise NotImplementedError(f'ERROR: Invalid optimizer - {self.args.optimizer}')
         
         self.model.train()
 
@@ -144,7 +228,7 @@ class SupNerEpisode:
                 label_cnt += tmp_label_cnt
                 correct_cnt += correct
                 epoch_sample += 1
-                if (it + 1) % 500 == 0:
+                if (it + 1) % 200 == 0:
                     precision = correct_cnt / pred_cnt
                     recall = correct_cnt / label_cnt
                     if precision + recall > 0:
@@ -354,7 +438,7 @@ class DistilledContinualNerEpisode(ContinualNerEpisode):
         if self.args.model == 'AddNER':
             all_logits, pred = self.model.train_forward(batch)
             label[label > 0] = 1
-            ce_loss = self.default_loss(all_logits[-1], label)
+            ce_loss = self._default_loss(all_logits[-1], label)
             if self.teacher:
                 teacher_dist, _ = self.teacher.train_forward(batch)
                 student_dist, _ = self.model.train_forward(batch)
@@ -364,7 +448,7 @@ class DistilledContinualNerEpisode(ContinualNerEpisode):
                 return ce_loss, pred
         elif self.args.model == 'ExtendNER':
             all_logits, pred = self.model.train_forward(batch)
-            ce_loss = self.default_loss(all_logits, label)
+            ce_loss = self._default_loss(all_logits, label)
             if self.teacher:
                 teacher_dist, _ = self.teacher.train_forward(batch)
                 student_dist, _ = self.model.train_forward(batch)
@@ -402,7 +486,7 @@ class OnlineNerEpisode(SupNerEpisode):
         if self.args.model == 'GDumb':
             logits, pred = self.model.train_forward(batch)
             assert logits.shape[0] == label.shape[0]
-            loss = self.default_loss(logits, label)
+            loss = self._default_loss(logits, label)
             return loss, pred
         else:
             (mu, sigma), pred = self.model.train_forward(batch)
@@ -411,7 +495,7 @@ class OnlineNerEpisode(SupNerEpisode):
     def learn_by_step(self, save_ckpt):
         it = 0
         for _, batch in enumerate(self.data_loader):
-            
+            self.data_until_check_step.append(batch)
             self.sampler.sample_online(batch)
             if (it + 1) % self.args.gdumb_check_steps == 0:
                 self.train_dataset = self.sampler

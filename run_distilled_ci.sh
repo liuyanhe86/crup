@@ -4,4 +4,4 @@ python main.py \
         --dataset stackoverflow \
         --setting CI \
         --model ExtendNER  \
-        --lr 5e-3
+        --lr 2e-5
