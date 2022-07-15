@@ -7,7 +7,7 @@ import torch
 import transformers
 
 from util.args import TypedArgumentParser
-from util.settings import CiSetting, MultiTaskSetting, OnlineSetting, SupervisedSetting, GDumb
+from util.settings import CiSetting, OnlineSetting, SupervisedSetting, GDumb
 
 
 def init_logging(filename):
@@ -68,9 +68,9 @@ def main():
             setting = OnlineSetting(args)
         setting.run()
 
-    elif args.setting == 'multi-task':
-        setting = MultiTaskSetting(args)
-        setting.run()
+    # elif args.setting == 'multi-task':
+    #     setting = MultiTaskSetting(args)
+    #     setting.run()
     
     else:
         raise NotImplementedError(f'{args.setting} has not been implemented!')
