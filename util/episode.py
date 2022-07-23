@@ -9,7 +9,7 @@ from tqdm import tqdm
 from torch.optim import AdamW, SGD
 
 from util.args import TypedArgumentParser
-from util.datasets import GDumbSampler, get_loader
+from util.datasets import get_loader
 from util.evaluator import Evaluater
 from model import BERTWordEncoder, BertTagger, PCP, ProtoNet, AddNER, ExtendNER
 
@@ -89,6 +89,25 @@ class SupNerEpisode:
         else:
             return x.item()
 
+    def _surrogate_loss(self):
+        '''
+        Calculate SI's surrogate loss.
+        '''
+        try:
+            losses = []
+            for n, p in self.model.named_parameters():
+                if p.requires_grad:
+                    # Retrieve previous parameter values and their normalized path integral (i.e., omega)
+                    n = n.replace('.', '__')
+                    prev_values = getattr(self, '{}_SI_prev_task'.format(n))
+                    omega = getattr(self, '{}_SI_omega'.format(n))
+                    # Calculate SI's surrogate loss, sum over all parameters
+                    losses.append((omega * (p-prev_values)**2).sum())
+            return sum(losses)
+        except AttributeError:
+            # SI-loss is 0 if there is no stored omega yet
+            return torch.tensor(0., device=self._device())
+
     def _default_loss(self, logits, label):
         N = logits.size(-1)
         cost = nn.CrossEntropyLoss(ignore_index=self.args.ignore_index)
@@ -119,31 +138,18 @@ class SupNerEpisode:
         return supervised_contrastive_loss
 
     def _kl_div(self, mu:torch.Tensor, sigma:torch.Tensor):
-        # logger.info(f'mu.shape:{mu.shape}, sigma.shape:{sigma.shape}')
-        # n_samples = mu.shape[0]
-        # matrix = torch.zeros(n_samples, n_samples)
-        # for i in range(n_samples):
-        #     logger.info(f'i:{i}')
-        #     for j in range(n_samples):
-        #         if i != j:
-        #             logger.info(f'  j:{j}')
-        #             mu_1, mu_2, sigma_1, sigma_2 = mu[i].detach(), mu[j].detach(), torch.diag(sigma[i].detach()), torch.diag(sigma[j].detach())
-        #             log_det = torch.log(torch.linalg.det(sigma_2)/torch.linalg.det(sigma_1))
-        #             trace = torch.trace(torch.linalg.inv(sigma_2) * sigma_1)
-        #             mm = torch.sum((mu_1 - mu_2) * torch.linalg.inv(sigma_2) * (mu_1 - mu_2))
-        #             matrix[i, j] = 0.5 * (log_det - n_samples + trace + mm)
         n_tokens, embed_dim = mu.shape[0], mu.shape[1]
         mu1_mu2_diff_mat =  mu.unsqueeze(1) -  mu.unsqueeze(0).repeat(n_tokens, 1, 1)  # [n_tokens, n_tokens, embed_dim]
         if torch.cuda.is_available():
             sigma = sigma.unsqueeze(1) * torch.eye(embed_dim).cuda()  # [n_tokens, embed_dim ,embed_dim]
         else:
-            sigma = sigma.unsqueeze(1) * torch.eye(embed_dim).cuda()
+            sigma = sigma.unsqueeze(1) * torch.eye(embed_dim)
         sigma_log_det = torch.linalg.det(sigma)
         sigma_log_det_ratio = torch.log((1 / sigma_log_det).unsqueeze(1) * sigma_log_det)
         sigma_inverse = torch.linalg.inv(sigma)  # [n_tokens, embed_dim ,embed_dim]
         sigma_mut_trace = torch.sum(sigma.unsqueeze(1) * sigma_inverse, dim=(-1,-2))
-        return 0.5 * (sigma_log_det_ratio - embed_dim + sigma_mut_trace + torch.sum(mu1_mu2_diff_mat.unsqueeze(-1) * sigma_inverse * mu1_mu2_diff_mat.unsqueeze(-1), dim=(-1,-2)))
-
+        mu_diff_sigma_inv_mu_diff = torch.sum(mu1_mu2_diff_mat.unsqueeze(-1) * sigma_inverse * mu1_mu2_diff_mat.unsqueeze(-1), dim=(-1,-2))
+        return 0.5 * (sigma_log_det_ratio - embed_dim + sigma_mut_trace + mu_diff_sigma_inv_mu_diff)  # [n_tokens, n_tokens]
 
     def _kl_div_loss(self, mu:torch.Tensor, sigma:torch.Tensor, label:torch.Tensor):
         mu, sigma = mu[label != self.args.ignore_index], sigma[label != self.args.ignore_index]
@@ -167,19 +173,48 @@ class SupNerEpisode:
         supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
         supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
         return supervised_contrastive_loss
-        
 
+    def _update_omega(self, W):
+        '''After completing training on a task, update the per-parameter regularization strength.
+
+        [W]         <dict> estimated parameter-specific contribution to changes in total loss of completed task
+        [epsilon]   <float> dampening parameter (to bound [omega] when [p_change] goes to 0)'''
+
+        # Loop over all parameters
+        for n, p in self.model.named_parameters():
+            if p.requires_grad:
+                n = n.replace('.', '__')
+
+                # Find/calculate new values for quadratic penalty on parameters
+                p_prev = getattr(self.model, '{}_SI_prev_task'.format(n))
+                p_current = p.detach().clone()
+                p_change = p_current - p_prev
+                omega_add = W[n]/(p_change**2 + self.args.epsilon)
+                try:
+                    omega = getattr(self.model, '{}_SI_omega'.format(n))
+                except AttributeError:
+                    omega = p.detach().clone().zero_()
+                omega_new = omega + omega_add
+
+                # Store these new values in the model
+                self.model.register_buffer('{}_SI_prev_task'.format(n), p_current)
+                self.model.register_buffer('{}_SI_omega'.format(n), omega_new)
+
+        
     def loss(self, batch, label):
-        if self.args.model == 'Bert-Tagger' or self.args.model == 'ProtoNet':
+        if self.args.model == 'Bert-Tagger' or self.args.model == 'ProtoNet' or self.args.model == 'GDumb':
             logits, pred = self.model.train_forward(batch)
             assert logits.shape[0] == label.shape[0]
             return self._default_loss(logits, label), pred
-        # elif self.args.augment:
-        #     embedding, pred = self.model.train_forward(batch)
-        #     return self._supcon_loss(embedding, label), pred
+        elif self.args.model == 'PCP':
+            if self.args.proj == 'point':
+                embedding, pred = self.model.train_forward(batch)
+                return self._supcon_loss(embedding, label), pred
+            elif self.args.proj == 'gaussian':
+                mu, sigma, pred = self.model.train_forward(batch)
+                return self._kl_div_loss(mu, sigma, label), pred
         else:
-            mu, sigma, pred = self.model.train_forward(batch)
-            return self._kl_div_loss(mu, sigma, label), pred
+            raise NotImplementedError(f'ERROR: Invalid model - {self.args.model}')
 
     def train(self, save_ckpt=None):
         logger.info('Start training ...')
@@ -195,6 +230,14 @@ class SupNerEpisode:
             raise NotImplementedError(f'ERROR: Invalid optimizer - {self.args.optimizer}')
         
         self.model.train()
+        if self.args.setting == 'CI':
+            W = {}
+            p_old = {}
+            for n, p in self.model.named_parameters():
+                if p.requires_grad:
+                    n = n.replace('.', '__')
+                    W[n] = p.data.clone().zero_()
+                    p_old[n] = p.data.clone()
 
         # Training
         best_f1 = 0.0
@@ -203,10 +246,10 @@ class SupNerEpisode:
         pred_cnt = 0
         label_cnt = 0
         correct_cnt = 0
-
         epoch = 0
         best_count = 0
         train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8)
+
         while epoch < self.args.train_epoch and best_count <= 3:
             it = 0
             for _, batch in tqdm(enumerate(train_data_loader), desc='train progress', total=len(self.train_dataset) // self.args.batch_size):
@@ -218,16 +261,26 @@ class SupNerEpisode:
                     label = label.cuda()
 
                 loss, pred = self.loss(batch, label)
+                if self.args.setting == 'ci':
+                    loss += self.args.si_c * self._surrogate_loss()
                 tmp_pred_cnt, tmp_label_cnt, correct = self.evaluator.metrics_by_entity(pred, label)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                if self.args.setting == 'CI':
+                    for n, p in self.model.named_parameters():
+                        if p.requires_grad:
+                            n = n.replace('.', '__')
+                            if p.grad is not None:
+                                W[n].add_(-p.grad*(p.detach()-p_old[n]))
+                            p_old[n] = p.detach().clone()
 
                 epoch_loss += self.item(loss.data)
                 pred_cnt += tmp_pred_cnt
                 label_cnt += tmp_label_cnt
                 correct_cnt += correct
                 epoch_sample += 1
+                
                 if (it + 1) % 200 == 0:
                     precision = correct_cnt / pred_cnt
                     recall = correct_cnt / label_cnt
@@ -236,17 +289,18 @@ class SupNerEpisode:
                     else:
                         f1 = 0
                     logger.info('[TRAIN] it: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
-                .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
+                .format(it + 1, epoch_loss / epoch_sample, precision, recall, f1) + '\r')
                 it += 1
-            precision = correct_cnt / pred_cnt
+            precision = (correct_cnt / pred_cnt) if pred_cnt > 0 else 0
             recall = correct_cnt / label_cnt
             f1 = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0
             logger.info('[TRAIN] epoch: {0} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
                 .format(epoch + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
 
-            if (epoch + 1) % self.args.val_step == 0 and self.val_dataset:
-                _, _, f1, _, _, _, _ = self.eval()
-                self.model.train()
+            if (epoch + 1) % self.args.val_step == 0:
+                if self.val_dataset:
+                    _, _, f1, _, _, _, _ = self.eval()
+                    self.model.train()
                 if f1 > best_f1:
                     logger.info('Best checkpoint')
                     torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
@@ -263,6 +317,8 @@ class SupNerEpisode:
             logger.info('Early stop')
         if best_f1 == 0.0 or self.val_dataset is None:
             torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
+        if self.args.setting == 'CI':
+            self._update_omega(W)
         logger.info(f'Finish training {self.args.model} on {self.args.dataset} in {self.args.setting} setting.')
 
     def eval(self, ckpt=None): 
@@ -335,17 +391,18 @@ class SupNerEpisode:
         return precision, recall, f1, fp_error, fn_error, within_error, outer_error    
 
 class ContinualNerEpisode(SupNerEpisode):
-    def __init__(self, args: TypedArgumentParser, result_dict: dict):
+
+    def __init__(self, args: TypedArgumentParser, ci_tasks):
         SupNerEpisode.__init__(self, args)
         self.test_datasets = {}
-        self.result_dict = result_dict
+        self.result_dict = {task : {'precision': [], 'recall': [], 'f1': []} for task in ci_tasks}
     
     def initialize_model(self, load_ckpt=None):
         super().initialize_model()
         if load_ckpt:
             self.load_state(load_ckpt)
 
-    def append_task(self, task, train_dataset, val_dataset, test_dataset):
+    def move_to(self, task, train_dataset, val_dataset, test_dataset):
         self.task = task
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
@@ -423,11 +480,9 @@ class ContinualNerEpisode(SupNerEpisode):
                     self.result_dict[task]['precision'].append(precision)
                     self.result_dict[task]['recall'].append(recall)
                     self.result_dict[task]['f1'].append(f1)
-                    self.result_dict[task]['fp_error'].append(fp)
-                    self.result_dict[task]['fn_error'].append(fn)
-                    self.result_dict[task]['within_error'].append(within)
-                    self.result_dict[task]['outer_error'].append(outer)
 
+    def get_results(self):
+        return self.result_dict
 class DistilledContinualNerEpisode(ContinualNerEpisode):
 
     def __init__(self, args: TypedArgumentParser, result_dict: dict):
@@ -467,53 +522,23 @@ class DistilledContinualNerEpisode(ContinualNerEpisode):
             elif self.args.model == 'ExtendNER':
                 self.model.add_unit()
                 
-
 class OnlineNerEpisode(SupNerEpisode):
-    def __init__(self, args:TypedArgumentParser, dataset=None):
-        SupNerEpisode.__init__(self, args)
-        self.dataset = dataset
-        self.data_loader = get_loader(dataset=dataset, batch_size=args.batch_size, num_workers=8)
+    def __init__(self, args:TypedArgumentParser, train_dataset=None, val_dataset=None, test_dataset=None):
+        SupNerEpisode.__init__(self, args, train_dataset, val_dataset, test_dataset)
 
-    def learn(self, ckpt):
-        if self.args.model == 'GDumb':
-            self.sampler = GDumbSampler()
-            self.data_until_check_step = []
-            self.learn_by_step(ckpt)
-        else:
-            self.learn_by_batch(ckpt)
-
-    def loss(self, batch, label):
-        if self.args.model == 'GDumb':
-            logits, pred = self.model.train_forward(batch)
-            assert logits.shape[0] == label.shape[0]
-            loss = self._default_loss(logits, label)
-            return loss, pred
-        else:
-            (mu, sigma), pred = self.model.train_forward(batch)
-            pass
-
-    def learn_by_step(self, save_ckpt):
-        it = 0
-        for _, batch in enumerate(self.data_loader):
-            self.data_until_check_step.append(batch)
-            self.sampler.sample_online(batch)
-            if (it + 1) % self.args.gdumb_check_steps == 0:
-                self.train_dataset = self.sampler
-                super().train(save_ckpt)
-
-                
-        
-    def learn_by_batch(self, save_ckpt):
+    def learn(self, save_ckpt):
         logger.info("Start online learning...")
         # Init optimizer
         parameters_to_optimize = self.model.get_parameters_to_optimize()
 
-        # if self.args.use_sgd:
-        logger.info('Optimizer: SGD')
-        optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
-        # else:
-        #     logger.info('Optimizer: AdamW')
-        #     optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)        
+        if self.args.optimizer == 'SGD':
+            logger.info('Optimizer: SGD')
+            optimizer = torch.optim.SGD(parameters_to_optimize, lr=self.args.lr)
+        elif self.args.optimizer == 'AdamW':
+            logger.info('Optimizer: AdamW')
+            optimizer = AdamW(parameters_to_optimize, lr=self.args.lr)
+        else:
+            raise NotImplementedError(f'ERROR: Invalid optimizer - {self.args.optimizer}')
 
         self.model.train()
         # Training
@@ -523,8 +548,15 @@ class OnlineNerEpisode(SupNerEpisode):
         label_cnt = 0
         correct_cnt = 0
         it = 0
-        for _, batch in tqdm(enumerate(self.data_loader), desc='online learning progress', total=len(self.dataset) // self.args.batch_size):
+
+        seen_labels = set()
+        all_entities_seen = 0
+        flag = True
+        result_dict = {'precision':[], 'recall': [], 'f1': []}
+        train_data_loader = get_loader(self.train_dataset, batch_size=self.args.batch_size)
+        for _, batch in tqdm(enumerate(train_data_loader), desc='online learning progress', total=len(self.train_dataset) // self.args.batch_size):
             label = torch.cat(batch['label'], 0)
+            seen_labels = seen_labels.union(label.tolist())
             if torch.cuda.is_available():
                 for k in batch:
                     if k != 'label' and k != 'label2tag':
@@ -546,13 +578,27 @@ class OnlineNerEpisode(SupNerEpisode):
             recall = correct_cnt / label_cnt
             f1 = 2 * precision * recall / (precision + recall)
             if (it + 1) % self.args.val_step == 0:
-                logger.info('epoch: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
+                logger.info('it: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
                     .format(it + 1, epoch_loss/ epoch_sample, precision, recall, f1) + '\r')
                 epoch_loss = 0.
                 epoch_sample = 0.
                 pred_cnt = 0
                 label_cnt = 0
                 correct_cnt = 0
+                if (it + 1) % self.args.online_check_steps == 0:
+                    torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
+                    logger.info('[TEST] Online Check')
+                    precision, recall, f1, _, _, _, _ = self.eval(save_ckpt)
+                    result_dict['precision'].append(precision)
+                    result_dict['recall'].append(recall)
+                    result_dict['f1'].append(f1)
+            if flag and len(seen_labels) == len(self.train_dataset.get_label_set()):
+                logger.info(f'[NOTING] All entities have been seen at ith-batches: {it + 1}!')
+                flag = False
+                all_entities_seen = it
+            if all_entities_seen > 0 and it > all_entities_seen + 100:
+                break
             it += 1
-        torch.save({'state_dict': self.model.state_dict()}, save_ckpt)
-        logger.info(f'Finish learning {self.args.model}.')
+        
+        logger.info(f'Finish online learning {self.args.model}.')
+        return result_dict
