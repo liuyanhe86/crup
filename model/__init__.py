@@ -1,9 +1,10 @@
 from .base import NERModel
+from .wordencoder import BERTWordEncoder
 from .berttagger import BertTagger
-from .proto import ProtoNet
-from .pcp import PCP
 from .addner import AddNER
 from .extendner import ExtendNER
-from .wordencoder import BERTWordEncoder
+from .proto import ProtoNet
+from .crup import CRUP
 
-__all__ = [NERModel, BertTagger, PCP, ProtoNet, AddNER, ExtendNER, BERTWordEncoder]
+
+__all__ = [NERModel, BERTWordEncoder, BertTagger, CRUP, ProtoNet, AddNER, ExtendNER]

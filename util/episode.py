@@ -11,7 +11,7 @@ from torch.optim import AdamW, SGD
 from util.args import TypedArgumentParser
 from util.datasets import get_loader
 from util.evaluator import Evaluater
-from model import BERTWordEncoder, BertTagger, PCP, ProtoNet, AddNER, ExtendNER
+from model import BERTWordEncoder, BertTagger, CRUP, ProtoNet, AddNER, ExtendNER
 
 
 logger = logging.getLogger(__name__)
@@ -22,8 +22,8 @@ def get_model(args: TypedArgumentParser):
         model = ProtoNet(word_encoder, proto_update=args.proto_update, metric=args.metric)
     elif args.model == 'Bert-Tagger' or args.model == 'GDumb':
         model = BertTagger(word_encoder)
-    elif args.model == 'PCP':
-        model = PCP(word_encoder,proto_update=args.proto_update, metric=args.metric, embedding_dimension=args.embedding_dimension)
+    elif args.model == 'CRUP':
+        model = CRUP(word_encoder,proto_update=args.proto_update, metric=args.metric, embedding_dimension=args.embedding_dimension)
     elif args.model == 'AddNER':
         model = AddNER(word_encoder)
     elif args.model == 'ExtendNER':
@@ -99,8 +99,8 @@ class SupNerEpisode:
                 if p.requires_grad:
                     # Retrieve previous parameter values and their normalized path integral (i.e., omega)
                     n = n.replace('.', '__')
-                    prev_values = getattr(self, '{}_SI_prev_task'.format(n))
-                    omega = getattr(self, '{}_SI_omega'.format(n))
+                    prev_values = getattr(self.model, '{}_SI_prev_task'.format(n))
+                    omega = getattr(self.model, '{}_SI_omega'.format(n))
                     # Calculate SI's surrogate loss, sum over all parameters
                     losses.append((omega * (p-prev_values)**2).sum())
             return sum(losses)
@@ -112,52 +112,31 @@ class SupNerEpisode:
         N = logits.size(-1)
         cost = nn.CrossEntropyLoss(ignore_index=self.args.ignore_index)
         return cost(logits.view(-1, N), label.view(-1))
-    
-    def _supcon_loss(self, embedding, labels):
-        embedding = embedding[labels != self.args.ignore_index]
-        labels = labels[labels != self.args.ignore_index]
+
+    def _dot_product(self, embedding:torch.Tensor):
         z_i, z_j = embedding, embedding.T
         dot_product_tempered = torch.mm(z_i, z_j) / self.args.temperature  # z_i dot z_j / tau
-        # Minus max for numerical stability with exponential. Same done in cross entropy. Epsilon added to avoid log(0)
-        exp_dot_tempered = (
-            torch.exp(dot_product_tempered - torch.max(dot_product_tempered, dim=1, keepdim=True)[0]) + 1e-5
-        )
-        if torch.cuda.is_available():
-            mask_similar_class = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels).cuda()
-        else:
-            mask_similar_class = (labels.unsqueeze(1).repeat(1, labels.shape[0]) == labels)
-        if torch.cuda.is_available():
-            mask_anchor_out = 1 - torch.eye(exp_dot_tempered.shape[0]).cuda()
-        else:
-            mask_anchor_out = 1 - torch.eye(exp_dot_tempered.shape[0])
-        mask_combined = mask_similar_class * mask_anchor_out
-        cardinality_per_batchs = torch.sum(mask_combined, dim=1)
-        log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered * mask_anchor_out, dim=1, keepdim=True)))
-        supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
-        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
-        return supervised_contrastive_loss
+        return dot_product_tempered
 
     def _kl_div(self, mu:torch.Tensor, sigma:torch.Tensor):
         n_tokens, embed_dim = mu.shape[0], mu.shape[1]
-        mu1_mu2_diff_mat =  mu.unsqueeze(1) -  mu.unsqueeze(0).repeat(n_tokens, 1, 1)  # [n_tokens, n_tokens, embed_dim]
+        mu1_mu2_diff_mat = mu.unsqueeze(0).repeat(n_tokens, 1, 1) - mu.unsqueeze(1)  # [n_tokens, n_tokens, embed_dim]
         if torch.cuda.is_available():
             sigma = sigma.unsqueeze(1) * torch.eye(embed_dim).cuda()  # [n_tokens, embed_dim ,embed_dim]
         else:
             sigma = sigma.unsqueeze(1) * torch.eye(embed_dim)
-        sigma_log_det = torch.linalg.det(sigma)
-        sigma_log_det_ratio = torch.log((1 / sigma_log_det).unsqueeze(1) * sigma_log_det)
+        sigma_det_log = torch.linalg.det(sigma)
+        sigma_det_ratio_log = torch.log((1 / sigma_det_log).unsqueeze(1) * sigma_det_log)
         sigma_inverse = torch.linalg.inv(sigma)  # [n_tokens, embed_dim ,embed_dim]
         sigma_mut_trace = torch.sum(sigma.unsqueeze(1) * sigma_inverse, dim=(-1,-2))
         mu_diff_sigma_inv_mu_diff = torch.sum(mu1_mu2_diff_mat.unsqueeze(-1) * sigma_inverse * mu1_mu2_diff_mat.unsqueeze(-1), dim=(-1,-2))
-        return 0.5 * (sigma_log_det_ratio - embed_dim + sigma_mut_trace + mu_diff_sigma_inv_mu_diff)  # [n_tokens, n_tokens]
+        kl_div_mat_one_side = 0.5 * (sigma_det_ratio_log - embed_dim + sigma_mut_trace + mu_diff_sigma_inv_mu_diff)  # [n_tokens, n_tokens]
+        return 0.5 * (kl_div_mat_one_side + kl_div_mat_one_side.T)
 
-    def _kl_div_loss(self, mu:torch.Tensor, sigma:torch.Tensor, label:torch.Tensor):
-        mu, sigma = mu[label != self.args.ignore_index], sigma[label != self.args.ignore_index]
+    def _contrastive_loss(self, distance_mat, label):
         label = label[label != self.args.ignore_index]
-        kl_divs = self._kl_div(mu, sigma)  # / self.args.temperature  # z_i dot z_j / tau
-        # Minus max for numerical stability with exponential. Same done in cross entropy. Epsilon added to avoid log(0)
         exp_dot_tempered = (
-            torch.exp(kl_divs - torch.max(kl_divs, dim=1, keepdim=True)[0]) + 1e-5
+            torch.exp(distance_mat - torch.max(distance_mat, dim=1, keepdim=True)[0]) + 1e-5
         )
         if torch.cuda.is_available():
             mask_similar_class = (label.unsqueeze(1).repeat(1, label.shape[0]) == label).cuda()
@@ -170,9 +149,9 @@ class SupNerEpisode:
         mask_combined = mask_similar_class * mask_anchor_out
         cardinality_per_batchs = torch.sum(mask_combined, dim=1)
         log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered * mask_anchor_out, dim=1, keepdim=True)))
-        supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
-        supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
-        return supervised_contrastive_loss
+        contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_batchs
+        contrastive_loss = torch.mean(contrastive_loss_per_sample)
+        return contrastive_loss
 
     def _update_omega(self, W):
         '''After completing training on a task, update the per-parameter regularization strength.
@@ -199,20 +178,21 @@ class SupNerEpisode:
                 # Store these new values in the model
                 self.model.register_buffer('{}_SI_prev_task'.format(n), p_current)
                 self.model.register_buffer('{}_SI_omega'.format(n), omega_new)
-
-        
+ 
     def loss(self, batch, label):
         if self.args.model == 'Bert-Tagger' or self.args.model == 'ProtoNet' or self.args.model == 'GDumb':
             logits, pred = self.model.train_forward(batch)
             assert logits.shape[0] == label.shape[0]
             return self._default_loss(logits, label), pred
-        elif self.args.model == 'PCP':
+        elif self.args.model == 'CRUP':
             if self.args.proj == 'point':
                 embedding, pred = self.model.train_forward(batch)
-                return self._supcon_loss(embedding, label), pred
+                embedding = embedding[label != self.args.ignore_index]
+                return self._contrastive_loss(self._dot_product(embedding), label), pred
             elif self.args.proj == 'gaussian':
                 mu, sigma, pred = self.model.train_forward(batch)
-                return self._kl_div_loss(mu, sigma, label), pred
+                mu, sigma = mu[label != self.args.ignore_index], sigma[label != self.args.ignore_index]
+                return self._contrastive_loss(self._kl_div(mu, sigma), label), pred
         else:
             raise NotImplementedError(f'ERROR: Invalid model - {self.args.model}')
 

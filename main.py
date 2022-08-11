@@ -52,28 +52,19 @@ def main():
 
     if args.setting == 'sup':
         setting = SupervisedSetting(args)
-        setting.run()
-    
     elif args.setting == 'CI':
         if args.model == 'GDumb':
             setting = GDumb(args)
         else:
             setting = CiSetting(args)
-        setting.run()
-
     elif args.setting == 'online':
         if args.model == 'GDumb':
             setting = GDumb(args)
         else:
             setting = OnlineSetting(args)
-        setting.run()
-
-    # elif args.setting == 'multi-task':
-    #     setting = MultiTaskSetting(args)
-    #     setting.run()
-    
     else:
         raise NotImplementedError(f'{args.setting} has not been implemented!')
+    setting.run()
         
 
 if __name__ == '__main__':
