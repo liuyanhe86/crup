@@ -63,7 +63,8 @@ class CiSetting(Setting):
             continual_episode = DistilledContinualNerEpisode(self.args, result_dict)
         else:
             continual_episode = ContinualNerEpisode(self.args, result_dict)
-            if self.args.si_c > 0:
+            if self.args.setting == 'CI':
+                logger.info('Initialize SI')
                 for n, p in continual_episode.model.named_parameters():
                     if p.requires_grad:
                         n = n.replace('.', '__')
@@ -188,8 +189,8 @@ class GDumb(Setting):
                     result_dict['precision'].append(precision)
                     result_dict['recall'].append(recall)
                     result_dict['f1'].append(f1)
-                    if all_entities_seen != 0 and batches > all_entities_seen + 100:
-                        logger.info('100 its after all entities seen!')
+                    if all_entities_seen != 0 and batches > all_entities_seen + 200:
+                        logger.info('200 batches after all entities seen!')
                         break
             if len(seen_labels) == len(train_dataset.get_label_set()) and flag:
                 logger.info(f'[NOTING] All entities have been seen at ith-batches: {batches}!')

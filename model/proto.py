@@ -46,11 +46,11 @@ class ProtoNet(NERModel):
                         new_proto = torch.mean(torch.stack((self.global_protos[label], mean), dim=0),dim=0)
                     self.global_protos[label] = new_proto
 
-    def _semantic_drift_compensation(self, x):
+    def _semantic_drift_compensation(self):
         self.word_encoder.requires_grad_(False)
-        z_c = self.encode(x)
+        z_c = self.encode(self.current_batch)
         self.word_encoder.requires_grad_(True)
-        tag = torch.cat(x['label'], 0)
+        tag = torch.cat(self.current_batch['label'], 0)
         for i in range(torch.max(tag) + 1):
             if i not in self.global_protos:
                 proto_i = torch.mean(z_c[tag == i], dim=0)
@@ -110,10 +110,9 @@ class ProtoNet(NERModel):
                     self._init_protos(x)
                     self.first_batch = False
                 else:
-                    self._semantic_drift_compensation(self.current_batch)
+                    self._semantic_drift_compensation()
                 rep = self.encode(x)
-                self.current_batch, self.z_p = x, rep.clone()
-                self.z_p.detach_()
+                self.current_batch, self.z_p = x, rep.clone().detach_()
             else:
                 raise NotImplementedError(f'ERROR: Invalid prototype update - {self.proto_update}')
         elif mode == 'test':

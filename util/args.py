@@ -3,7 +3,7 @@ from tap import Tap
 class TypedArgumentParser(Tap):
     dataset: str = 'coarse-few-nerd'  # dataset name
     setting: str = 'sup'  # continual learning setting, must be in [sup, CI, online, multi-task]
-    model: str = 'Bert-Tagger'  # model name, must be in [PCP, ProtoNet, BERT-Tagger, AddNER, ExtendNER]
+    model: str = 'Bert-Tagger'  # model name, must be in [CRUP, ProtoNet, BERT-Tagger, AddNER, ExtendNER]
     batch_size: int=32  # batch size
     train_epoch: int=10 # num of iters in training
     val_step: int=1  # val after training how many iters
