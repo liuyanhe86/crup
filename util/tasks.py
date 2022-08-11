@@ -3,22 +3,22 @@ FINE_FEW_NERD = ['art-film', 'product-train', 'other-livingthing', 'art-writtena
 STACKOVERFLOW = ['HTML_XML_Tag', 'Data_Structure', 'File_Name', 'Language', 'Device', 'Value', 'File_Type', 'Version', 'Data_Type', 'Variable_Name', 'Library_Class', 'Library_Variable', 'Class_Name', 'Code_Block', 'User_Interface_Element', 'Application', 'Library_Function', 'Library', 'Operating_System']
 
 def get_ci_coarse_few_nerd():
-    return {key: 'data/few-nerd/coarse/disjoint/' + key for key in COARSE_FEW_NERD}
+    return {entity: 'data/few-nerd/coarse/disjoint/' + entity for entity in COARSE_FEW_NERD}
 
 def get_ci_fine_few_nerd():
-    return {key: 'data/few-nerd/fine/disjoint/' + key for key in FINE_FEW_NERD}
+    return {entity: 'data/few-nerd/fine/disjoint/' + entity for entity in FINE_FEW_NERD}
 
 def get_ci_stackoverflow():
-    return {key: 'data/stackoverflow/disjoint/' + key for key in STACKOVERFLOW}
+    return {entity: 'data/stackoverflow/disjoint/' + entity for entity in STACKOVERFLOW}
 
-def get_online_coarse_few_nerd():
-    return {key: 'data/few-nerd/coarse/joint/' + key for key in COARSE_FEW_NERD}
+# def get_online_coarse_few_nerd():
+#     return {entity: 'data/few-nerd/coarse/joint/' + entity for entity in COARSE_FEW_NERD}
 
-def get_online_fine_few_nerd():
-    return {key: 'data/few-nerd/fine/joint/' + key for key in FINE_FEW_NERD}
+# def get_online_fine_few_nerd():
+#     return {entity: 'data/few-nerd/fine/joint/' + entity for entity in FINE_FEW_NERD}
 
-def get_online_stackoverflow():
-    return {key: 'data/stackoverflow/joint/' + key for key in STACKOVERFLOW}
+# def get_online_stackoverflow():
+#     return {entity: 'data/stackoverflow/joint/' + entity for entity in STACKOVERFLOW}
 
 PROTOCOLS = {
     'sup coarse-few-nerd': 'data/few-nerd/coarse/supervised',
@@ -27,10 +27,10 @@ PROTOCOLS = {
     'CI coarse-few-nerd': get_ci_coarse_few_nerd(),
     'CI fine-few-nerd': get_ci_fine_few_nerd(),
     'CI stackoverflow': get_ci_stackoverflow(),
-    'online coarse-few-nerd': get_online_coarse_few_nerd(),
-    'online fine-few-nerd': get_online_fine_few_nerd(),
-    'online stackoverflow': get_online_stackoverflow(),
-    'multi-task coarse-few-nerd': get_ci_coarse_few_nerd(),
-    'multi-task fine-few-nerd': get_ci_fine_few_nerd(),
-    'multi-task stackoverflow': get_ci_stackoverflow()
+    'online coarse-few-nerd': 'data/few-nerd/coarse/supervised',
+    'online fine-few-nerd': 'data/few-nerd/fine/supervised',
+    'online stackoverflow': 'data/stackoverflow/supervised'
+    # 'multi-task coarse-few-nerd': get_ci_coarse_few_nerd(),
+    # 'multi-task fine-few-nerd': get_ci_fine_few_nerd(),
+    # 'multi-task stackoverflow': get_ci_stackoverflow()
 }

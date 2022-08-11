@@ -1,8 +1,6 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 python main.py \
-        --dataset coarse-few-nerd \
+        --dataset stackoverflow \
         --setting online \
-        --model ProtoNet \
-        --batch_size 32 \
-        --val_step 10
+        --model GDumb

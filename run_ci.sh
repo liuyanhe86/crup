@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 # python main.py \
 #         --dataset coarse-few-nerd \
@@ -8,7 +8,7 @@ export CUDA_VISIBLE_DEVICES=0
 #         --only_test
 
 python main.py \
-        --dataset  fine-few-nerd \
+        --dataset  coarse-few-nerd \
         --setting CI \
         --model ProtoNet \
         --lr 5e-3 \

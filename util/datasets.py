@@ -325,7 +325,6 @@ class MultiNerDataset(NerDataset):
         self.max_length = max_length
         self.ignore_label_id = ignore_label_id
     
-    
     def append(self, file_path:str, label_offset:int=0):
         '''
         Append new dataset
@@ -352,9 +351,16 @@ class GDumbSampler(NerDataset):
         self.budget = {}
         self.size = size
         self.n_class = 0
+        
+    def init_members(self, dataset:NerDataset):
+        self.tokenizer=dataset.tokenizer
+        self.augment=dataset.augment
+        self.max_length=dataset.max_length
+        self.ignore_label_id=dataset.ignore_label_id
+        self.label2tag=dataset.label2tag
+        self.tag2label=dataset.tag2label
 
     def sample_ci(self, dataset: ContinualNerDataset):
-        self.tokenizer, self.max_length, self.ignore_label_id, self.label2tag, self.tag2label = dataset.tokenizer, dataset.max_length, dataset.ignore_label_id, dataset.label2tag, dataset.tag2label
         new_class_samples = []
         self.n_class += 1
         max_samples_per_class = self.size // self.n_class
@@ -375,8 +381,24 @@ class GDumbSampler(NerDataset):
         for _, samples_per_class in self.budget.items():
             self.samples += samples_per_class
 
-    def sample_online(self, dataset: NerDataset):
-        pass
+    def sample_online(self, sample:Sample):
+        entities_in_sample = set(sample.tags)
+        for tag in entities_in_sample:
+            self.budget[tag] = self.budget.get(tag, 0) + 1
+        self.samples.append(sample)
+        while len(self.samples) > self.size:
+            idx_popped = random.randint(0, len(self.samples) - 1)
+            sample_popped = self.samples[idx_popped]
+            entities_popped = set(sample_popped.tags)
+            flag = True
+            for e in entities_popped:
+                if self.budget[e] == 1:
+                    flag = False
+                    break
+                self.budget[e] -= 1
+            if flag:
+                self.samples.pop(idx_popped)
+
 
 def collate_fn(data):
     batch = {'sentence': [], 'attention_mask': [], 'text_mask':[], 'label':[]}
