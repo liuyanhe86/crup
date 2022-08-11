@@ -1,1 +1,1 @@
-# Continual Named Entity Recognition via Progressive Contrastive Prototype
+# Continual Named Entity Recognition via Contrastive Real-time Updating Prototype
