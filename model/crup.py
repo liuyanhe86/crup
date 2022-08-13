@@ -20,10 +20,6 @@ class CRUP(ProtoNet):
             nn.Linear(word_encoder.output_dim,
                       embedding_dimension)
         )
-    
-    def __batch_dist__(self, proto, embedding):
-        proto_mu, proto_sigma = self.f_mu(proto), self.f_sigma(proto)
-        embed_mu, embed_sigma = self.f_mu(embedding), self.f_sigma(embedding)
 
     def train_forward(self, x):
         rep, _, pred = self._get_rep_logits_pred(x, mode='train')
